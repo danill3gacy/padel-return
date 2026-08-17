@@ -4,8 +4,8 @@ from __future__ import annotations
 import hashlib
 import re
 import statistics
-from datetime import datetime, date, timedelta
-from typing import Iterable, Optional
+from collections.abc import Iterable
+from datetime import date, datetime, timedelta
 
 RU_MONTHS = {
     1: "января", 2: "февраля", 3: "марта", 4: "апреля", 5: "мая", 6: "июня",
@@ -21,7 +21,7 @@ RU_DOW_PREP = {
 }
 
 
-def normalize_phone(raw: str | None) -> Optional[str]:
+def normalize_phone(raw: str | None) -> str | None:
     """Приводим к E.164 для России. Возвращаем None, если это не телефон."""
     if not raw:
         return None
@@ -42,7 +42,7 @@ def normalize_phone(raw: str | None) -> Optional[str]:
     return "+" + digits
 
 
-def parse_dt(value) -> Optional[datetime]:
+def parse_dt(value) -> datetime | None:
     """Терпимый парсер дат из выгрузок CRM."""
     if value is None or value == "":
         return None
@@ -86,7 +86,7 @@ def parse_money(value) -> float:
         return 0.0
 
 
-def iso(dt: Optional[datetime]) -> Optional[str]:
+def iso(dt: datetime | None) -> str | None:
     return dt.isoformat(sep=" ", timespec="seconds") if dt else None
 
 

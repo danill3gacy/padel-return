@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from . import db
 from .config import Config
-from .utils import fmt_slot_ru, next_weekday_at
+from .utils import fmt_slot_ru
 
 KIND_TITLES = {
     "assembled": "собранная игра",
@@ -167,7 +167,7 @@ def plan_offer(conn, club_id: int, campaign_id: int, row, cfg: Config,
 
 
 def _offer_dict(conn, offer_id: int) -> dict:
-    o = db.one(conn, "SELECT * FROM offers WHERE id=?", (offer_id,))
+    o = db.must(conn, "SELECT * FROM offers WHERE id=?", (offer_id,))
     dt = datetime.fromisoformat(o["slot_datetime"])
     return {
         "id": o["id"],
@@ -195,7 +195,7 @@ def accept(conn, offer_id: int, contact_id: int) -> dict:
     filled = db.scalar(
         conn, "SELECT COUNT(*) FROM offer_seats WHERE offer_id=? AND state='accepted'", (offer_id,)
     )
-    o = db.one(conn, "SELECT seats_total FROM offers WHERE id=?", (offer_id,))
+    o = db.must(conn, "SELECT seats_total FROM offers WHERE id=?", (offer_id,))
     status = "full" if filled >= o["seats_total"] else "open"
     conn.execute("UPDATE offers SET seats_filled=?, status=? WHERE id=?", (filled, status, offer_id))
     conn.commit()

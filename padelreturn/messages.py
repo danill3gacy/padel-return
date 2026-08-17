@@ -46,7 +46,6 @@ def offer_text(offer: dict, club_name: str) -> str:
     """Человеческое описание оффера — идёт и в промпт, и в шаблон."""
     k = offer["kind"]
     when = offer["when_ru"]
-    left = offer["seats_left"]
     filled = offer["seats_filled"]
     if k == "assembled":
         return f"{when} собралась игра, свободно одно место, партнёры примерно вашего уровня"

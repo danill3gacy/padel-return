@@ -30,8 +30,8 @@ def compute(conn, club_id: int, as_of: datetime | None = None) -> dict:
         cancelled = [r for r in rows if r["status"] == "cancelled"]
         no_shows = [r for r in rows if r["status"] == "no_show"]
 
-        dts = sorted(parse_dt(r["starts_at"]) for r in done if r["starts_at"])
-        dts = [d for d in dts if d]
+        parsed = (parse_dt(r["starts_at"]) for r in done if r["starts_at"])
+        dts = sorted(d for d in parsed if d is not None)
 
         first_visit = dts[0] if dts else None
         last_visit = dts[-1] if dts else None

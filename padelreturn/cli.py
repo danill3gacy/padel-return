@@ -7,8 +7,9 @@ import os
 import sys
 from datetime import datetime
 
-from . import (attribution, campaign as camp_mod, db, features, importer, inbox,
-               offers as offers_mod, reasons, report, segmentation)
+from . import attribution, db, features, importer, inbox, reasons, report, segmentation
+from . import campaign as camp_mod
+from . import offers as offers_mod
 from .config import CONFIG, Config
 from .segmentation import SEGMENT_TITLES
 

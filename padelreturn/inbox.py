@@ -8,7 +8,8 @@ import json
 import re
 from datetime import datetime
 
-from . import db, offers as offers_mod
+from . import db
+from . import offers as offers_mod
 from .config import Config
 from .llm import LLM
 from .utils import first_name, iso
@@ -117,7 +118,7 @@ def handle(conn, club_id: int, campaign_id: int, contact_id: int, text: str,
            cfg: Config, channel: str = "whatsapp", as_of: datetime | None = None) -> dict:
     """Обрабатывает один входящий ответ. Возвращает решение и, если нужно, ответ бота."""
     as_of = as_of or datetime.now()
-    contact = db.one(conn, "SELECT * FROM contacts WHERE id=?", (contact_id,))
+    contact = db.must(conn, "SELECT * FROM contacts WHERE id=?", (contact_id,))
     last_out = db.one(
         conn,
         """SELECT * FROM messages WHERE campaign_id=? AND contact_id=? AND direction='out'
@@ -203,7 +204,7 @@ def pending_tasks(conn, club_id: int, kind: str | None = None) -> list:
     sql = """SELECT t.*, c.name, c.phone FROM tasks t
              LEFT JOIN contacts c ON c.id=t.contact_id
              WHERE t.club_id=? AND t.state='pending'"""
-    params = [club_id]
+    params: list[object] = [club_id]
     if kind:
         sql += " AND t.kind=?"
         params.append(kind)

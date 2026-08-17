@@ -4,10 +4,11 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 
-from . import db, channels, offers as offers_mod
+from . import channels, db
+from . import offers as offers_mod
 from .config import Config
 from .llm import LLM
-from .messages import generate, with_footer, violates
+from .messages import generate, violates, with_footer
 from .segmentation import audience
 from .utils import iso
 
@@ -32,7 +33,7 @@ def plan(conn, club_id: int, campaign_id: int, cfg: Config, as_of: datetime | No
     Ничего не отправляет. Всё, что здесь создано, можно вычитать глазами.
     """
     as_of = as_of or datetime.now()
-    club = db.one(conn, "SELECT * FROM clubs WHERE id=?", (club_id,))
+    club = db.must(conn, "SELECT * FROM clubs WHERE id=?", (club_id,))
     llm = LLM(cfg)
     rows = audience(conn, campaign_id, include_control=False)
     if limit:
@@ -189,7 +190,7 @@ def schedule_followups(conn, club_id: int, campaign_id: int, cfg: Config,
                        as_of: datetime | None = None) -> dict:
     """Касания 2 и 3 — только тем, кто не ответил. Ответил что угодно — автоматика молчит."""
     as_of = as_of or datetime.now()
-    club = db.one(conn, "SELECT * FROM clubs WHERE id=?", (club_id,))
+    club = db.must(conn, "SELECT * FROM clubs WHERE id=?", (club_id,))
     llm = LLM(cfg)
     slots = offers_mod.free_slots(conn, club_id, cfg, as_of=as_of)
     stats = {"touch2": 0, "touch3": 0}

@@ -17,7 +17,7 @@ def compute(conn, club_id: int, campaign_id: int, cfg: Config, as_of: datetime |
     as_of = as_of or datetime.now()
     conn.execute("DELETE FROM attributions WHERE campaign_id=?", (campaign_id,))
 
-    camp = db.one(conn, "SELECT * FROM campaigns WHERE id=?", (campaign_id,))
+    camp = db.must(conn, "SELECT * FROM campaigns WHERE id=?", (campaign_id,))
     camp_start = parse_dt(camp["started_at"]) or as_of
 
     rows = db.all_rows(
@@ -53,7 +53,7 @@ def compute(conn, club_id: int, campaign_id: int, cfg: Config, as_of: datetime |
         revenue = 0.0
         n_bookings = 0
         if returned_at:
-            agg = db.one(
+            agg = db.must(
                 conn,
                 """SELECT COALESCE(SUM(amount),0) AS rev, COUNT(*) AS n FROM bookings
                    WHERE contact_id=? AND status='done' AND starts_at >= ? AND starts_at <= ?""",
@@ -76,7 +76,7 @@ def compute(conn, club_id: int, campaign_id: int, cfg: Config, as_of: datetime |
 
 def report(conn, campaign_id: int, cfg: Config) -> dict:
     def agg(is_control: int) -> dict:
-        row = db.one(
+        row = db.must(
             conn,
             """SELECT COUNT(*) n,
                       SUM(CASE WHEN returned_at IS NOT NULL THEN 1 ELSE 0 END) returned,

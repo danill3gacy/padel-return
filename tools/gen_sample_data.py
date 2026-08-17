@@ -106,7 +106,6 @@ def generate(n_clients: int, months: int, seed: int, outdir: str, as_of: datetim
             interval, n_visits, stop_days_ago = rnd.choice([16, 20, 25]), rnd.randint(4, 10), rnd.randint(0, 25)
 
         last = as_of - timedelta(days=stop_days_ago)
-        usual_dow = rnd.randint(0, 6)
         usual_hour = rnd.choice([9, 10, 11, 12, 19, 20, 21] if profile != "loyal_active" else [19, 20, 21])
         court = rnd.choice(COURTS)
         coach = GONE_COACH if profile == "coach_orphan" else rnd.choice(COACHES[:3])

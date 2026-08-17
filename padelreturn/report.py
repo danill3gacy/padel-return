@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import html
-import json
 from datetime import datetime
 
-from . import db, attribution, campaign as camp_mod, offers as offers_mod
+from . import attribution, db
+from . import campaign as camp_mod
+from . import offers as offers_mod
 from .config import Config
-from .segmentation import SEGMENT_TITLES, SEGMENT_PRIORITY
+from .segmentation import SEGMENT_PRIORITY, SEGMENT_TITLES
 
 CSS = """
 :root{--ink:#14171a;--muted:#6b7280;--line:#e5e7eb;--bg:#fbfbfc;--accent:#1f6feb;--good:#127a4b;--warn:#9a3412}
@@ -50,8 +51,8 @@ def _money(x) -> str:
 
 def build(conn, club_id: int, campaign_id: int, cfg: Config, out_path: str,
           sample_messages: int = 6) -> str:
-    club = db.one(conn, "SELECT * FROM clubs WHERE id=?", (club_id,))
-    camp = db.one(conn, "SELECT * FROM campaigns WHERE id=?", (campaign_id,))
+    club = db.must(conn, "SELECT * FROM clubs WHERE id=?", (club_id,))
+    camp = db.must(conn, "SELECT * FROM campaigns WHERE id=?", (campaign_id,))
     cs = camp_mod.stats(conn, campaign_id)
     at = attribution.report(conn, campaign_id, cfg)
     osum = offers_mod.summary(conn, campaign_id)

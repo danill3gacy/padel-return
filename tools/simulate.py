@@ -11,7 +11,8 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, ".")
 
-from padelreturn import db, inbox, attribution, campaign as camp_mod, importer, report  # noqa: E402
+from padelreturn import attribution, db, importer, inbox, report  # noqa: E402
+from padelreturn import campaign as camp_mod
 from padelreturn.config import CONFIG  # noqa: E402
 from tools.gen_sample_data import simulate_future  # noqa: E402
 

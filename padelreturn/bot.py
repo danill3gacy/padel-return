@@ -12,7 +12,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import attribution, campaign as camp_mod, db, inbox
+from . import attribution, db, inbox
+from . import campaign as camp_mod
 from .config import CONFIG
 
 

@@ -8,9 +8,10 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from padelreturn import db, attribution, campaign as camp_mod, features, inbox, segmentation  # noqa: E402
+from padelreturn import attribution, db, features, inbox, segmentation  # noqa: E402
+from padelreturn import campaign as camp_mod
 from padelreturn.config import Config  # noqa: E402
-from padelreturn.messages import violates, sanitize, offer_text  # noqa: E402
+from padelreturn.messages import offer_text, sanitize, violates  # noqa: E402
 from padelreturn.segmentation import is_sleeping  # noqa: E402
 from padelreturn.utils import normalize_phone, parse_dt, parse_money, stable_bucket  # noqa: E402
 

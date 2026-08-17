@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import csv
 import json
-from typing import Iterable
+from collections.abc import Iterable
 
 from . import db
-from .utils import normalize_phone, parse_dt, parse_money, iso
+from .utils import iso, normalize_phone, parse_dt, parse_money
 
 # Синонимы колонок по разным CRM (Sport Priority, Cue, Sport Groups, YCLIENTS, 1С, Fitbase).
 CLIENT_ALIASES = {
@@ -72,7 +72,7 @@ def guess_map(headers: Iterable[str], aliases: dict[str, list[str]]) -> dict[str
 
 
 def sniff_csv(path: str):
-    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+    with open(path, encoding="utf-8-sig", newline="") as f:
         sample = f.read(8192)
         f.seek(0)
         try:

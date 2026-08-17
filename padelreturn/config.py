@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 
 
 def _env(key: str, default: str = "") -> str:
@@ -71,7 +71,7 @@ class Config:
     require_approval: bool = True        # human-in-the-loop: подтверждение перед отправкой
     dry_run: bool = _env("PADEL_DRY_RUN", "0") == "1"
 
-    def merged(self, overrides: dict | None) -> "Config":
+    def merged(self, overrides: dict | None) -> Config:
         if not overrides:
             return self
         data = asdict(self)

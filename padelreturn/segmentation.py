@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from . import db
 from .config import Config
@@ -64,7 +64,7 @@ def _is_seasonal(conn, contact_id: int, cfg: Config, as_of: datetime) -> bool:
     )
     if len(rows) < cfg.seasonal_min_visits:
         return False
-    months = Counter()
+    months: Counter[int] = Counter()
     for r in rows:
         d = parse_dt(r["starts_at"])
         if d:
@@ -104,7 +104,7 @@ def build(conn, club_id: int, campaign_id: int, cfg: Config, as_of: datetime | N
     )
 
     conn.execute("DELETE FROM segments WHERE campaign_id=?", (campaign_id,))
-    counts = Counter()
+    counts: Counter[str] = Counter()
 
     for r in rows:
         excl = _exclusion(r, conn, club_id, cfg, as_of)

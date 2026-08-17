@@ -4,8 +4,9 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections.abc import Iterable
 from contextlib import contextmanager
-from typing import Any, Iterable
+from typing import Any
 
 DEFAULT_DB = os.environ.get("PADEL_DB", "padel_return.db")
 
@@ -256,6 +257,18 @@ def tx(conn: sqlite3.Connection):
 def one(conn, sql: str, params: Iterable = ()) -> sqlite3.Row | None:
     cur = conn.execute(sql, tuple(params))
     return cur.fetchone()
+
+
+def must(conn, sql: str, params: Iterable = ()) -> sqlite3.Row:
+    """Строка, которая обязана существовать.
+
+    Явная ошибка вместо `TypeError: 'NoneType' is not subscriptable` через
+    десять кадров стека: если запись не найдена, видно какой запрос её искал.
+    """
+    row = one(conn, sql, params)
+    if row is None:
+        raise LookupError(f"запрос не вернул строку: {' '.join(sql.split())[:120]}")
+    return row
 
 
 def all_rows(conn, sql: str, params: Iterable = ()) -> list[sqlite3.Row]:

@@ -5,8 +5,6 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
-
 from . import db
 from .config import Config
 from .features import top_partners
@@ -207,7 +205,7 @@ def infer(conn, club_id: int, campaign_id: int, cfg: Config, use_llm: bool = Tru
         )
 
     conn.commit()
-    stats["by_reason"] = by_reason
-    db.log(conn, "reasons", "infer", stats)
+    payload: dict[str, object] = {**stats, "by_reason": by_reason}
+    db.log(conn, "reasons", "infer", payload)
     conn.commit()
-    return stats
+    return payload
