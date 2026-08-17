@@ -2,6 +2,7 @@
 
 Нужен только для демо и для отладки. В бою ответы приходят вебхуком провайдера.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -19,10 +20,22 @@ from tools.gen_sample_data import simulate_future  # noqa: E402
 # Как отвечают живые люди. Вероятности подобраны под бенчмарки из PRD:
 # ответ 15-25%, согласие 8-12%, отписка <3%.
 REPLIES = {
-    "accept": ["Да, записывайте", "Давайте", "Го", "Ок, буду", "+", "Да, подходит",
-               "Хорошо, запишите меня", "Да, давно хотел вернуться"],
-    "reschedule": ["Не могу в это время, есть что-то вечером?", "В это время работаю",
-                   "А в выходные есть?", "Другой день можно?"],
+    "accept": [
+        "Да, записывайте",
+        "Давайте",
+        "Го",
+        "Ок, буду",
+        "+",
+        "Да, подходит",
+        "Хорошо, запишите меня",
+        "Да, давно хотел вернуться",
+    ],
+    "reschedule": [
+        "Не могу в это время, есть что-то вечером?",
+        "В это время работаю",
+        "А в выходные есть?",
+        "Другой день можно?",
+    ],
     "price": ["А сколько стоит?", "Дороговато стало", "Скидки есть?"],
     "later": ["Сейчас в отпуске, попозже", "Травма, пока не играю", "Не сейчас, спасибо"],
     "question": ["Ракетку можно взять в аренду?", "А парковка есть?"],
@@ -30,18 +43,33 @@ REPLIES = {
     "stop": ["Стоп", "Отпишите меня"],
 }
 # Доли ответивших по типам
-MIX = (["accept"] * 42 + ["reschedule"] * 20 + ["price"] * 10 + ["later"] * 12 +
-       ["question"] * 8 + ["negative"] * 3 + ["stop"] * 5)
+MIX = (
+    ["accept"] * 42
+    + ["reschedule"] * 20
+    + ["price"] * 10
+    + ["later"] * 12
+    + ["question"] * 8
+    + ["negative"] * 3
+    + ["stop"] * 5
+)
 
 
-def run(db_path: str, club: str, campaign_id: int, reply_rate: float, seed: int,
-        bookings_src: str, out_report: str):
+def run(
+    db_path: str,
+    club: str,
+    campaign_id: int,
+    reply_rate: float,
+    seed: int,
+    bookings_src: str,
+    out_report: str,
+):
     rnd = random.Random(seed)
     conn = db.init_db(db_path)
     cfg = CONFIG.merged({"default_channel": "console", "require_approval": False})
     club_id = db.get_or_create_club(conn, club)
     camp = camp_mod.get(conn, campaign_id)
     from padelreturn.utils import parse_dt
+
     as_of = parse_dt(camp["started_at"]) or datetime.now()
 
     sent = db.all_rows(
@@ -59,29 +87,52 @@ def run(db_path: str, club: str, campaign_id: int, reply_rate: float, seed: int,
             continue
         intent = rnd.choice(MIX)
         text = rnd.choice(REPLIES[intent])
-        res = inbox.handle(conn, club_id, campaign_id, row["contact_id"], text, cfg,
-                           channel="whatsapp", as_of=as_of + timedelta(hours=rnd.randint(1, 40)))
+        res = inbox.handle(
+            conn,
+            club_id,
+            campaign_id,
+            row["contact_id"],
+            text,
+            cfg,
+            channel="whatsapp",
+            as_of=as_of + timedelta(hours=rnd.randint(1, 40)),
+        )
         answered += 1
         if res["intent"] == "accept":
             accepted_ext.append(row["external_id"])
         # часть тех, кто просил перенос, соглашается на альтернативу
         elif res["intent"] == "reschedule" and rnd.random() < 0.45:
-            inbox.handle(conn, club_id, campaign_id, row["contact_id"], "Да, давайте так", cfg,
-                         channel="whatsapp", as_of=as_of + timedelta(hours=rnd.randint(41, 60)))
+            inbox.handle(
+                conn,
+                club_id,
+                campaign_id,
+                row["contact_id"],
+                "Да, давайте так",
+                cfg,
+                channel="whatsapp",
+                as_of=as_of + timedelta(hours=rnd.randint(41, 60)),
+            )
             accepted_ext.append(row["external_id"])
 
     print(f"Ответили: {answered}   Согласились: {len(accepted_ext)}")
 
     # Часть согласившихся реально доходит до корта (плюс небольшой органический возврат).
     came = [e for e in accepted_ext if rnd.random() < 0.72]
-    all_ext = {r["external_id"] for r in db.all_rows(
-        conn, "SELECT c.external_id FROM segments s JOIN contacts c ON c.id=s.contact_id "
-              "WHERE s.campaign_id=? AND s.sleeping=1", (campaign_id,))}
+    all_ext = {
+        r["external_id"]
+        for r in db.all_rows(
+            conn,
+            "SELECT c.external_id FROM segments s JOIN contacts c ON c.id=s.contact_id "
+            "WHERE s.campaign_id=? AND s.sleeping=1",
+            (campaign_id,),
+        )
+    }
     organic = [e for e in all_ext - set(came) if rnd.random() < 0.055]
     print(f"Дошли до корта: {len(came)}   Органический возврат (в т.ч. контроль): {len(organic)}")
 
-    future = simulate_future(bookings_src, "data/sample/bookings_after.csv",
-                             came + organic, as_of, seed=seed)
+    future = simulate_future(
+        bookings_src, "data/sample/bookings_after.csv", came + organic, as_of, seed=seed
+    )
     importer.import_bookings(conn, club_id, future)
 
     later = as_of + timedelta(days=61)
@@ -89,7 +140,9 @@ def run(db_path: str, club: str, campaign_id: int, reply_rate: float, seed: int,
 
     print("\n=== АТРИБУЦИЯ ===")
     t, c = res["treated"], res["control"]
-    print(f"Основная группа : {t['returned']}/{t['n']} = {t['rate']}%   выручка {t['revenue']:,.0f} ₽")
+    print(
+        f"Основная группа : {t['returned']}/{t['n']} = {t['rate']}%   выручка {t['revenue']:,.0f} ₽"
+    )
     print(f"Контроль        : {c['returned']}/{c['n']} = {c['rate']}%")
     print(f"Прирост         : +{res['uplift_pp']} п.п.")
     print(f"Инкрементальная выручка: {res['incremental_revenue']:,.0f} ₽")

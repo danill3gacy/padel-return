@@ -1,4 +1,5 @@
 """Тесты на то, что действительно ломает деньги: сегментация, идемпотентность, атрибуция."""
+
 from __future__ import annotations
 
 import os
@@ -66,16 +67,23 @@ class TestMessageGuards(unittest.TestCase):
         self.assertIsNotNone(violates("Да"))
 
     def test_accepts_good_message(self):
-        ok = ("Кирилл, здравствуйте. В четверг, 21 августа, в 19:00 собирается игра, "
-              "двое примерно вашего уровня уже есть, нужен третий. Играете?")
+        ok = (
+            "Кирилл, здравствуйте. В четверг, 21 августа, в 19:00 собирается игра, "
+            "двое примерно вашего уровня уже есть, нужен третий. Играете?"
+        )
         self.assertIsNone(violates(ok))
 
     def test_sanitize_strips_exclamations(self):
         self.assertNotIn("!", sanitize("Привет! Как дела?"))
 
     def test_offer_text_mentions_who_is_already_in(self):
-        offer = {"kind": "assembling", "when_ru": "в четверг, в 19:00", "seats_left": 2,
-                 "seats_filled": 2, "price": 2800}
+        offer = {
+            "kind": "assembling",
+            "when_ru": "в четверг, в 19:00",
+            "seats_left": 2,
+            "seats_filled": 2,
+            "price": 2800,
+        }
         self.assertIn("двое", offer_text(offer, "Клуб"))
 
 
@@ -87,8 +95,15 @@ class TestPipeline(unittest.TestCase):
             os.remove(self.DB)
         self.conn = db.init_db(self.DB)
         self.club_id = db.get_or_create_club(
-            self.conn, "Тест", {"courts_count": 2, "open_hour": 8, "close_hour": 22,
-                                "price_peak": 4000, "price_offpeak": 2500}
+            self.conn,
+            "Тест",
+            {
+                "courts_count": 2,
+                "open_hour": 8,
+                "close_hour": 22,
+                "price_peak": 4000,
+                "price_offpeak": 2500,
+            },
         )
         self.now = datetime(2026, 8, 14, 12, 0)
         self._seed()
@@ -101,9 +116,9 @@ class TestPipeline(unittest.TestCase):
     def _seed(self):
         """3 клиента: спящий постоянный, активный, новичок-однодневка."""
         people = [
-            ("C1", "Дмитрий Волков", "+79161111111", 20, 7, 70),    # спящий, ходил еженедельно
-            ("C2", "Анна Смирнова", "+79162222222", 25, 7, 3),      # активный
-            ("C3", "Пётр Зайцев", "+79163333333", 1, 0, 120),       # новичок, был раз
+            ("C1", "Дмитрий Волков", "+79161111111", 20, 7, 70),  # спящий, ходил еженедельно
+            ("C2", "Анна Смирнова", "+79162222222", 25, 7, 3),  # активный
+            ("C3", "Пётр Зайцев", "+79163333333", 1, 0, 120),  # новичок, был раз
         ]
         bid = 1
         for ext, name, phone, visits, interval, gone in people:
@@ -118,8 +133,16 @@ class TestPipeline(unittest.TestCase):
                 self.conn.execute(
                     """INSERT INTO bookings (club_id, external_id, contact_id, starts_at,
                        court_id, type, status, amount) VALUES (?,?,?,?,?,?,?,?)""",
-                    (self.club_id, f"B{bid}", cid, dt.replace(hour=19).isoformat(sep=" "),
-                     "C1", "rent", "done", 4000),
+                    (
+                        self.club_id,
+                        f"B{bid}",
+                        cid,
+                        dt.replace(hour=19).isoformat(sep=" "),
+                        "C1",
+                        "rent",
+                        "done",
+                        4000,
+                    ),
                 )
                 bid += 1
         self.conn.commit()
@@ -128,8 +151,8 @@ class TestPipeline(unittest.TestCase):
     def test_segmentation_finds_the_right_people(self):
         camp = camp_mod.create(self.conn, self.club_id, "t", CFG)
         stats = segmentation.build(self.conn, self.club_id, camp, CFG, as_of=self.now)
-        self.assertEqual(stats["sleeping"], 2)   # Дмитрий и Пётр
-        self.assertEqual(stats["active"], 1)     # Анна
+        self.assertEqual(stats["sleeping"], 2)  # Дмитрий и Пётр
+        self.assertEqual(stats["active"], 1)  # Анна
 
         rows = {r["name"]: r for r in segmentation.audience(self.conn, camp, include_control=True)}
         self.assertEqual(rows["Пётр Зайцев"]["segment"], "A")
@@ -141,7 +164,7 @@ class TestPipeline(unittest.TestCase):
         first = camp_mod.plan(self.conn, self.club_id, camp, CFG, as_of=self.now)
         second = camp_mod.plan(self.conn, self.club_id, camp, CFG, as_of=self.now)
         self.assertGreater(first["planned"], 0)
-        self.assertEqual(second["planned"], 0)          # повторный прогон никому не пишет дважды
+        self.assertEqual(second["planned"], 0)  # повторный прогон никому не пишет дважды
         self.assertEqual(second["skipped"], first["planned"])
 
     def test_stop_word_puts_contact_on_stop_list(self):
@@ -152,7 +175,9 @@ class TestPipeline(unittest.TestCase):
         cid = db.one(self.conn, "SELECT id FROM contacts WHERE external_id='C1'")["id"]
         res = inbox.handle(self.conn, self.club_id, camp, cid, "стоп", CFG, as_of=self.now)
         self.assertEqual(res["intent"], "stop")
-        self.assertEqual(db.one(self.conn, "SELECT stop_list FROM contacts WHERE id=?", (cid,))["stop_list"], 1)
+        self.assertEqual(
+            db.one(self.conn, "SELECT stop_list FROM contacts WHERE id=?", (cid,))["stop_list"], 1
+        )
 
     def test_reply_cancels_pending_touches(self):
         camp = camp_mod.create(self.conn, self.club_id, "t", CFG)
@@ -161,13 +186,16 @@ class TestPipeline(unittest.TestCase):
         cid = db.one(self.conn, "SELECT id FROM contacts WHERE external_id='C3'")["id"]
         self.conn.execute(
             """INSERT INTO messages (campaign_id, contact_id, touch_no, direction, channel,
-               body, status) VALUES (?,?,2,'out','console','x','queued')""", (camp, cid))
+               body, status) VALUES (?,?,2,'out','console','x','queued')""",
+            (camp, cid),
+        )
         self.conn.commit()
         inbox.handle(self.conn, self.club_id, camp, cid, "Да, записывайте", CFG, as_of=self.now)
         left = db.scalar(
             self.conn,
             "SELECT COUNT(*) FROM messages WHERE campaign_id=? AND contact_id=? AND status='queued'",
-            (camp, cid))
+            (camp, cid),
+        )
         self.assertEqual(left, 0)
 
     def test_accept_creates_admin_task_not_a_booking(self):
@@ -194,23 +222,45 @@ class TestPipeline(unittest.TestCase):
         self.conn.execute(
             """INSERT INTO bookings (club_id, external_id, contact_id, starts_at, court_id,
                type, status, amount) VALUES (?,?,?,?,?,?,?,?)""",
-            (self.club_id, "BX1", cid, (self.now + timedelta(days=5)).isoformat(sep=" "),
-             "C1", "rent", "done", 4000))
+            (
+                self.club_id,
+                "BX1",
+                cid,
+                (self.now + timedelta(days=5)).isoformat(sep=" "),
+                "C1",
+                "rent",
+                "done",
+                4000,
+            ),
+        )
         # далеко за окном выручки — не должно попасть
         self.conn.execute(
             """INSERT INTO bookings (club_id, external_id, contact_id, starts_at, court_id,
                type, status, amount) VALUES (?,?,?,?,?,?,?,?)""",
-            (self.club_id, "BX2", cid, (self.now + timedelta(days=200)).isoformat(sep=" "),
-             "C1", "rent", "done", 9999))
+            (
+                self.club_id,
+                "BX2",
+                cid,
+                (self.now + timedelta(days=200)).isoformat(sep=" "),
+                "C1",
+                "rent",
+                "done",
+                9999,
+            ),
+        )
         self.conn.commit()
 
-        res = attribution.compute(self.conn, self.club_id, camp, CFG,
-                                  as_of=self.now + timedelta(days=90))
-        seg = db.one(self.conn, "SELECT is_control FROM segments WHERE campaign_id=? AND contact_id=?",
-                     (camp, cid))
+        res = attribution.compute(
+            self.conn, self.club_id, camp, CFG, as_of=self.now + timedelta(days=90)
+        )
+        seg = db.one(
+            self.conn,
+            "SELECT is_control FROM segments WHERE campaign_id=? AND contact_id=?",
+            (camp, cid),
+        )
         group = res["control"] if seg["is_control"] else res["treated"]
         self.assertEqual(group["returned"], 1)
-        self.assertEqual(group["revenue"], 4000.0)   # 9999 не попал
+        self.assertEqual(group["revenue"], 4000.0)  # 9999 не попал
 
 
 if __name__ == "__main__":

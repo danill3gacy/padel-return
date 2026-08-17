@@ -4,9 +4,11 @@
 Telegram-бот доступен только тем, кто уже нажал /start, SMS — фолбэк.
 Смена провайдера не должна переписывать половину кода.
 """
+
 from __future__ import annotations
 
 import json
+import sqlite3
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -29,10 +31,10 @@ class Channel:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
-    def available_for(self, contact) -> bool:
+    def available_for(self, contact: sqlite3.Row) -> bool:
         raise NotImplementedError
 
-    def send(self, contact, text: str, template_key: str | None = None) -> SendResult:
+    def send(self, contact: sqlite3.Row, text: str, template_key: str | None = None) -> SendResult:
         raise NotImplementedError
 
 
@@ -42,24 +44,26 @@ class ConsoleChannel(Channel):
     Именно с него начинается первая кампания: сообщения выгружаются и отправляются
     руками с телефона клуба.
     """
+
     name = "console"
 
-    def available_for(self, contact) -> bool:
+    def available_for(self, contact: sqlite3.Row) -> bool:
         return True
 
-    def send(self, contact, text: str, template_key: str | None = None) -> SendResult:
+    def send(self, contact: sqlite3.Row, text: str, template_key: str | None = None) -> SendResult:
         print(f"\n--- [{contact['name']} | {contact['phone']}] ---\n{text}")
         return SendResult(ok=True, channel=self.name, provider_id="console", cost=0.0)
 
 
 class TelegramChannel(Channel):
     """Бесплатно и лучше всех конвертит, но работает только с теми, кто уже в боте."""
+
     name = "telegram"
 
-    def available_for(self, contact) -> bool:
+    def available_for(self, contact: sqlite3.Row) -> bool:
         return bool(contact["tg_chat_id"]) and bool(self.cfg.tg_bot_token)
 
-    def send(self, contact, text: str, template_key: str | None = None) -> SendResult:
+    def send(self, contact: sqlite3.Row, text: str, template_key: str | None = None) -> SendResult:
         if self.cfg.dry_run:
             return SendResult(True, self.name, "dry-run")
         url = f"https://api.telegram.org/bot{self.cfg.tg_bot_token}/sendMessage"
@@ -70,22 +74,27 @@ class TelegramChannel(Channel):
             )
             with urllib.request.urlopen(req, timeout=20) as r:
                 data = json.loads(r.read())
-            return SendResult(bool(data.get("ok")), self.name,
-                              str(data.get("result", {}).get("message_id")), cost=self.cfg.cost_telegram)
+            return SendResult(
+                bool(data.get("ok")),
+                self.name,
+                str(data.get("result", {}).get("message_id")),
+                cost=self.cfg.cost_telegram,
+            )
         except (urllib.error.URLError, TimeoutError, ValueError) as e:
             return SendResult(False, self.name, error=str(e))
 
 
 class WhatsAppChannel(Channel):
     """Единственный рабочий холодный канал. Вне 24-часового окна — только шаблоны."""
+
     name = "whatsapp"
 
-    def available_for(self, contact) -> bool:
+    def available_for(self, contact: sqlite3.Row) -> bool:
         if self.cfg.dry_run:
             return bool(contact["phone"])
         return bool(contact["phone"]) and bool(self.cfg.wa_api_url and self.cfg.wa_api_key)
 
-    def send(self, contact, text: str, template_key: str | None = None) -> SendResult:
+    def send(self, contact: sqlite3.Row, text: str, template_key: str | None = None) -> SendResult:
         if self.cfg.dry_run:
             return SendResult(True, self.name, "dry-run", cost=self.cfg.cost_whatsapp)
         payload = {
@@ -107,7 +116,9 @@ class WhatsAppChannel(Channel):
             )
             with urllib.request.urlopen(req, timeout=25) as r:
                 data = json.loads(r.read())
-            return SendResult(True, self.name, str(data.get("messageId")), cost=self.cfg.cost_whatsapp)
+            return SendResult(
+                True, self.name, str(data.get("messageId")), cost=self.cfg.cost_whatsapp
+            )
         except (urllib.error.URLError, TimeoutError, ValueError) as e:
             return SendResult(False, self.name, error=str(e))
 
@@ -115,12 +126,12 @@ class WhatsAppChannel(Channel):
 class SmsChannel(Channel):
     name = "sms"
 
-    def available_for(self, contact) -> bool:
+    def available_for(self, contact: sqlite3.Row) -> bool:
         if self.cfg.dry_run:
             return bool(contact["phone"])
         return bool(contact["phone"]) and bool(self.cfg.sms_api_url and self.cfg.sms_api_key)
 
-    def send(self, contact, text: str, template_key: str | None = None) -> SendResult:
+    def send(self, contact: sqlite3.Row, text: str, template_key: str | None = None) -> SendResult:
         if self.cfg.dry_run:
             return SendResult(True, self.name, "dry-run", cost=self.cfg.cost_sms)
         payload = {
@@ -142,12 +153,10 @@ class SmsChannel(Channel):
             return SendResult(False, self.name, error=str(e))
 
 
-REGISTRY = {
-    c.name: c for c in (ConsoleChannel, TelegramChannel, WhatsAppChannel, SmsChannel)
-}
+REGISTRY = {c.name: c for c in (ConsoleChannel, TelegramChannel, WhatsAppChannel, SmsChannel)}
 
 
-def pick(cfg: Config, contact) -> Channel:
+def pick(cfg: Config, contact: sqlite3.Row) -> Channel:
     """Telegram, если человек уже в боте (бесплатно). Иначе основной канал. Иначе фолбэк."""
     tg = TelegramChannel(cfg)
     if tg.available_for(contact):

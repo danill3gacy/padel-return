@@ -1,9 +1,11 @@
 """CLI. Один разработчик, ноль фронтенда — всё делается отсюда и из Telegram-бота."""
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from datetime import datetime
 
@@ -14,7 +16,7 @@ from .config import CONFIG, Config
 from .segmentation import SEGMENT_TITLES
 
 
-def _cfg(args) -> Config:
+def _cfg(args: argparse.Namespace) -> Config:
     cfg = CONFIG
     over = {}
     if getattr(args, "channel", None):
@@ -28,27 +30,29 @@ def _cfg(args) -> Config:
     return cfg.merged(over)
 
 
-def _conn(args):
+def _conn(args: argparse.Namespace) -> sqlite3.Connection:
     return db.init_db(args.db)
 
 
-def _p(obj):
+def _p(obj: object) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=2, default=str))
 
 
-def cmd_init(args):
+def cmd_init(args: argparse.Namespace) -> None:
     conn = _conn(args)
     settings = {
-        "open_hour": args.open_hour, "close_hour": args.close_hour,
+        "open_hour": args.open_hour,
+        "close_hour": args.close_hour,
         "courts_count": args.courts,
         "peak_hours": list(range(18, 23)),
-        "price_peak": args.price_peak, "price_offpeak": args.price_offpeak,
+        "price_peak": args.price_peak,
+        "price_offpeak": args.price_offpeak,
     }
     club_id = db.get_or_create_club(conn, args.club, settings)
     print(f"Клуб «{args.club}» готов. id={club_id}, база: {args.db}")
 
 
-def cmd_import(args):
+def cmd_import(args: argparse.Namespace) -> None:
     conn = _conn(args)
     club_id = db.get_or_create_club(conn, args.club)
     out = {}
@@ -60,11 +64,13 @@ def cmd_import(args):
     _p(out)
 
 
-def cmd_segment(args):
+def cmd_segment(args: argparse.Namespace) -> None:
     conn = _conn(args)
     cfg = _cfg(args)
     club_id = db.get_or_create_club(conn, args.club)
-    camp_id = args.campaign or camp_mod.create(conn, club_id, args.name or f"Возврат {datetime.now():%d.%m.%Y}", cfg)
+    camp_id = args.campaign or camp_mod.create(
+        conn, club_id, args.name or f"Возврат {datetime.now():%d.%m.%Y}", cfg
+    )
     stats = segmentation.build(conn, club_id, camp_id, cfg)
     rstats = reasons.infer(conn, club_id, camp_id, cfg, use_llm=not args.no_llm)
     print(f"\nКампания id={camp_id}\n")
@@ -79,11 +85,13 @@ def cmd_segment(args):
     print(f"{'Активных (не трогаем)':<34} {stats['active']:>8}")
     print(f"{'Исключено':<34} {stats['excluded']:>8}")
     print(f"\nПричины ухода: {json.dumps(rstats['by_reason'], ensure_ascii=False)}")
-    print(f"Источник гипотез: LLM {rstats['llm']}, правила {rstats['rules']}, "
-          f"принудительно «неизвестно» {rstats['forced_unknown']}")
+    print(
+        f"Источник гипотез: LLM {rstats['llm']}, правила {rstats['rules']}, "
+        f"принудительно «неизвестно» {rstats['forced_unknown']}"
+    )
 
 
-def cmd_plan(args):
+def cmd_plan(args: argparse.Namespace) -> None:
     conn = _conn(args)
     cfg = _cfg(args)
     club_id = db.get_or_create_club(conn, args.club)
@@ -94,54 +102,61 @@ def cmd_plan(args):
         _p(fu)
 
 
-def cmd_preview(args):
+def cmd_preview(args: argparse.Namespace) -> None:
     conn = _conn(args)
     rows = camp_mod.preview(conn, args.campaign, args.n)
     for r in rows:
         warn = f"  ⚠ {r['warning']}" if r["warning"] else ""
         print("─" * 74)
-        print(f"[касание {r['touch_no']}] {r['name']} · {r['phone']} · {r['channel']} · "
-              f"{SEGMENT_TITLES.get(r['segment'], '—')}{warn}")
-        print(f"причина: {(r['reason'] or '—').replace('_', ' ')} "
-              f"(уверенность {r['confidence']:.2f}) — {r['evidence'] or ''}")
+        print(
+            f"[касание {r['touch_no']}] {r['name']} · {r['phone']} · {r['channel']} · "
+            f"{SEGMENT_TITLES.get(r['segment'], '—')}{warn}"
+        )
+        print(
+            f"причина: {(r['reason'] or '—').replace('_', ' ')} "
+            f"(уверенность {r['confidence']:.2f}) — {r['evidence'] or ''}"
+        )
         if r["kind"]:
-            print(f"оффер: {offers_mod.KIND_TITLES.get(r['kind'], r['kind'])} · "
-                  f"{r['slot_datetime']} · мест занято {r['seats_filled']}/{r['seats_total']}")
+            print(
+                f"оффер: {offers_mod.KIND_TITLES.get(r['kind'], r['kind'])} · "
+                f"{r['slot_datetime']} · мест занято {r['seats_filled']}/{r['seats_total']}"
+            )
         print()
         print(r["body"])
         print()
 
 
-def cmd_approve(args):
+def cmd_approve(args: argparse.Namespace) -> None:
     conn = _conn(args)
     ids = [int(x) for x in args.ids.split(",")] if args.ids else None
     n = camp_mod.approve(conn, args.campaign, ids)
     print(f"Подтверждено сообщений: {n}")
 
 
-def _at(args) -> datetime | None:
+def _at(args: argparse.Namespace) -> datetime | None:
     v = getattr(args, "at", None)
     if not v:
         return None
     from .utils import parse_dt
+
     return parse_dt(v)
 
 
-def cmd_run(args):
+def cmd_run(args: argparse.Namespace) -> None:
     conn = _conn(args)
     cfg = _cfg(args)
     stats = camp_mod.run(conn, args.campaign, cfg, as_of=_at(args), max_send=args.limit)
     _p(stats)
 
 
-def cmd_followups(args):
+def cmd_followups(args: argparse.Namespace) -> None:
     conn = _conn(args)
     cfg = _cfg(args)
     club_id = db.get_or_create_club(conn, args.club)
     _p(camp_mod.schedule_followups(conn, club_id, args.campaign, cfg, as_of=_at(args)))
 
 
-def cmd_reply(args):
+def cmd_reply(args: argparse.Namespace) -> None:
     conn = _conn(args)
     cfg = _cfg(args)
     club_id = db.get_or_create_club(conn, args.club)
@@ -151,7 +166,7 @@ def cmd_reply(args):
         print(f"\nответ агента:\n{res['reply']}")
 
 
-def cmd_tasks(args):
+def cmd_tasks(args: argparse.Namespace) -> None:
     conn = _conn(args)
     club_id = db.get_or_create_club(conn, args.club)
     rows = inbox.pending_tasks(conn, club_id, args.kind)
@@ -168,13 +183,13 @@ def cmd_tasks(args):
     print(f"Всего: {len(rows)}. Подтвердить: python -m padelreturn.cli task-done --id N")
 
 
-def cmd_task_done(args):
+def cmd_task_done(args: argparse.Namespace) -> None:
     conn = _conn(args)
     inbox.resolve_task(conn, args.id)
     print(f"Задача #{args.id} закрыта.")
 
 
-def cmd_attribute(args):
+def cmd_attribute(args: argparse.Namespace) -> None:
     conn = _conn(args)
     cfg = _cfg(args)
     club_id = db.get_or_create_club(conn, args.club)
@@ -185,7 +200,7 @@ def cmd_attribute(args):
     _p(res)
 
 
-def cmd_report(args):
+def cmd_report(args: argparse.Namespace) -> None:
     conn = _conn(args)
     cfg = _cfg(args)
     club_id = db.get_or_create_club(conn, args.club)
@@ -193,7 +208,7 @@ def cmd_report(args):
     print(f"Отчёт: {path}")
 
 
-def cmd_stats(args):
+def cmd_stats(args: argparse.Namespace) -> None:
     conn = _conn(args)
     _p(camp_mod.stats(conn, args.campaign))
 
@@ -289,7 +304,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     return args.func(args)
 

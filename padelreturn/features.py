@@ -1,6 +1,8 @@
 """Расчёт признаков клиента и графа партнёрств."""
+
 from __future__ import annotations
 
+import sqlite3
 from collections import defaultdict
 from datetime import datetime
 
@@ -8,7 +10,7 @@ from . import db
 from .utils import iso, median, mode_or_none, parse_dt
 
 
-def compute(conn, club_id: int, as_of: datetime | None = None) -> dict:
+def compute(conn: sqlite3.Connection, club_id: int, as_of: datetime | None = None) -> dict:
     as_of = as_of or datetime.now()
     contacts = db.all_rows(conn, "SELECT id, level FROM contacts WHERE club_id=?", (club_id,))
     bookings = db.all_rows(
@@ -52,16 +54,36 @@ def compute(conn, club_id: int, as_of: datetime | None = None) -> dict:
         lessons_share = lessons / visits if visits else 0.0
         tournaments = len([r for r in done if r["type"] == "tournament"])
 
-        level_proxy = c["level"] if c["level"] is not None else _level_proxy(visits, lessons_share, tournaments)
+        level_proxy = (
+            c["level"]
+            if c["level"] is not None
+            else _level_proxy(visits, lessons_share, tournaments)
+        )
 
         conn.execute(
             """INSERT INTO features (contact_id, club_id, first_visit, last_visit, visits_total,
                revenue_total, days_since_last, avg_interval, lifespan_days, usual_dow, usual_hour,
                main_coach, no_show_rate, cancel_rate, lessons_share, tournaments, level_proxy)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (c["id"], club_id, iso(first_visit), iso(last_visit), visits, revenue, days_since,
-             avg_interval, lifespan, usual_dow, usual_hour, main_coach, no_show_rate, cancel_rate,
-             lessons_share, tournaments, level_proxy),
+            (
+                c["id"],
+                club_id,
+                iso(first_visit),
+                iso(last_visit),
+                visits,
+                revenue,
+                days_since,
+                avg_interval,
+                lifespan,
+                usual_dow,
+                usual_hour,
+                main_coach,
+                no_show_rate,
+                cancel_rate,
+                lessons_share,
+                tournaments,
+                level_proxy,
+            ),
         )
 
     _compute_partnerships(conn, club_id, bookings)
@@ -69,8 +91,12 @@ def compute(conn, club_id: int, as_of: datetime | None = None) -> dict:
 
     stats = {
         "contacts": len(contacts),
-        "with_visits": db.scalar(conn, "SELECT COUNT(*) FROM features WHERE club_id=? AND visits_total>0", (club_id,)),
-        "partnerships": db.scalar(conn, "SELECT COUNT(*) FROM partnerships WHERE club_id=?", (club_id,)),
+        "with_visits": db.scalar(
+            conn, "SELECT COUNT(*) FROM features WHERE club_id=? AND visits_total>0", (club_id,)
+        ),
+        "partnerships": db.scalar(
+            conn, "SELECT COUNT(*) FROM partnerships WHERE club_id=?", (club_id,)
+        ),
     }
     db.log(conn, "features", "compute", stats)
     conn.commit()
@@ -80,13 +106,15 @@ def compute(conn, club_id: int, as_of: datetime | None = None) -> dict:
 def _level_proxy(visits: int, lessons_share: float, tournaments: int) -> float:
     """Грубая оценка уровня по шкале 1-7, когда клуб не ведёт уровни."""
     base = 1.6
-    base += min(visits, 40) * 0.055           # опыт
-    base += min(tournaments, 10) * 0.09       # турниры — сильный сигнал
-    base += lessons_share * 0.5               # занимался с тренером
+    base += min(visits, 40) * 0.055  # опыт
+    base += min(tournaments, 10) * 0.09  # турниры — сильный сигнал
+    base += lessons_share * 0.5  # занимался с тренером
     return round(min(base, 6.5), 2)
 
 
-def _compute_partnerships(conn, club_id: int, bookings) -> None:
+def _compute_partnerships(
+    conn: sqlite3.Connection, club_id: int, bookings: list[sqlite3.Row]
+) -> None:
     """Партнёрства восстанавливаем по совпадению корта и времени начала."""
     conn.execute("DELETE FROM partnerships WHERE club_id=?", (club_id,))
     slots: dict[tuple, list[tuple[int, str]]] = defaultdict(list)
@@ -105,17 +133,18 @@ def _compute_partnerships(conn, club_id: int, bookings) -> None:
             for j in range(i + 1, len(ids)):
                 pairs[(ids[i], ids[j])].append(when)
 
-    for (a, b), whens in pairs.items():
-        last = max(whens)
-        for x, y in ((a, b), (b, a)):
+    for (left, right), whens in pairs.items():
+        last_game = max(whens)
+        for x, y in ((left, right), (right, left)):
             conn.execute(
-                """INSERT OR REPLACE INTO partnerships (club_id, contact_a, contact_b, games_count, last_game_at)
+                """INSERT OR REPLACE INTO partnerships
+                       (club_id, contact_a, contact_b, games_count, last_game_at)
                    VALUES (?,?,?,?,?)""",
-                (club_id, x, y, len(whens), last),
+                (club_id, x, y, len(whens), last_game),
             )
 
 
-def top_partners(conn, club_id: int, contact_id: int, limit: int = 3) -> list:
+def top_partners(conn: sqlite3.Connection, club_id: int, contact_id: int, limit: int = 3) -> list:
     return db.all_rows(
         conn,
         """SELECT p.contact_b AS id, p.games_count, p.last_game_at,

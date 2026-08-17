@@ -1,9 +1,11 @@
 """Импорт выгрузок CRM. Универсального парсера нет — есть автоугадывание + маппинг полей."""
+
 from __future__ import annotations
 
 import csv
 import json
-from collections.abc import Iterable
+import sqlite3
+from collections.abc import Iterable, Sequence
 
 from . import db
 from .utils import iso, normalize_phone, parse_dt, parse_money
@@ -13,7 +15,14 @@ CLIENT_ALIASES = {
     "external_id": ["client_id", "id", "клиент id", "идентификатор", "код клиента", "guid", "uid"],
     "name": ["name", "имя", "фио", "клиент", "полное имя", "full_name", "фамилия имя"],
     "phone": ["phone", "телефон", "тел", "мобильный", "номер", "phone_number", "контакт"],
-    "created_at": ["created_at", "дата регистрации", "создан", "первый визит", "registered", "дата создания"],
+    "created_at": [
+        "created_at",
+        "дата регистрации",
+        "создан",
+        "первый визит",
+        "registered",
+        "дата создания",
+    ],
     "level": ["level", "уровень", "рейтинг", "rating"],
     "gender": ["gender", "пол", "sex"],
     "consent": ["consent", "согласие", "consent_marketing", "рассылка", "подписка"],
@@ -23,8 +32,23 @@ CLIENT_ALIASES = {
 
 BOOKING_ALIASES = {
     "external_id": ["booking_id", "id", "номер", "код брони", "заказ"],
-    "contact_external_id": ["client_id", "клиент", "клиент id", "contact_id", "код клиента", "customer_id"],
-    "starts_at": ["starts_at", "start", "начало", "дата начала", "дата и время", "дата", "datetime"],
+    "contact_external_id": [
+        "client_id",
+        "клиент",
+        "клиент id",
+        "contact_id",
+        "код клиента",
+        "customer_id",
+    ],
+    "starts_at": [
+        "starts_at",
+        "start",
+        "начало",
+        "дата начала",
+        "дата и время",
+        "дата",
+        "datetime",
+    ],
     "ends_at": ["ends_at", "end", "конец", "окончание", "дата окончания"],
     "court_id": ["court_id", "корт", "court", "площадка", "ресурс"],
     "type": ["type", "тип", "услуга", "вид", "категория"],
@@ -35,17 +59,41 @@ BOOKING_ALIASES = {
 }
 
 STATUS_MAP = {
-    "состоялась": "done", "завершена": "done", "оплачена": "done", "выполнена": "done",
-    "done": "done", "completed": "done", "confirmed": "done", "visited": "done", "пришёл": "done",
-    "отменена": "cancelled", "отмена": "cancelled", "cancelled": "cancelled", "canceled": "cancelled",
-    "неявка": "no_show", "не пришёл": "no_show", "no_show": "no_show", "noshow": "no_show",
+    "состоялась": "done",
+    "завершена": "done",
+    "оплачена": "done",
+    "выполнена": "done",
+    "done": "done",
+    "completed": "done",
+    "confirmed": "done",
+    "visited": "done",
+    "пришёл": "done",
+    "отменена": "cancelled",
+    "отмена": "cancelled",
+    "cancelled": "cancelled",
+    "canceled": "cancelled",
+    "неявка": "no_show",
+    "не пришёл": "no_show",
+    "no_show": "no_show",
+    "noshow": "no_show",
 }
 
 TYPE_MAP = {
-    "аренда": "rent", "корт": "rent", "игра": "rent", "rent": "rent", "booking": "rent",
-    "тренировка": "lesson", "занятие": "lesson", "персональная": "lesson", "lesson": "lesson",
-    "групповая": "group", "группа": "group", "group": "group",
-    "турнир": "tournament", "tournament": "tournament", "американо": "tournament",
+    "аренда": "rent",
+    "корт": "rent",
+    "игра": "rent",
+    "rent": "rent",
+    "booking": "rent",
+    "тренировка": "lesson",
+    "занятие": "lesson",
+    "персональная": "lesson",
+    "lesson": "lesson",
+    "групповая": "group",
+    "группа": "group",
+    "group": "group",
+    "турнир": "tournament",
+    "tournament": "tournament",
+    "американо": "tournament",
 }
 
 
@@ -71,7 +119,7 @@ def guess_map(headers: Iterable[str], aliases: dict[str, list[str]]) -> dict[str
     return result
 
 
-def sniff_csv(path: str):
+def sniff_csv(path: str) -> tuple[list[dict], Sequence[str]]:
     with open(path, encoding="utf-8-sig", newline="") as f:
         sample = f.read(8192)
         f.seek(0)
@@ -84,7 +132,7 @@ def sniff_csv(path: str):
         return list(reader), reader.fieldnames or []
 
 
-def save_map(conn, club_id: int, kind: str, mapping: dict) -> None:
+def save_map(conn: sqlite3.Connection, club_id: int, kind: str, mapping: dict) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO field_maps (club_id, kind, map_json) VALUES (?,?,?)",
         (club_id, kind, json.dumps(mapping, ensure_ascii=False)),
@@ -92,12 +140,16 @@ def save_map(conn, club_id: int, kind: str, mapping: dict) -> None:
     conn.commit()
 
 
-def load_map(conn, club_id: int, kind: str) -> dict | None:
-    row = db.one(conn, "SELECT map_json FROM field_maps WHERE club_id=? AND kind=?", (club_id, kind))
+def load_map(conn: sqlite3.Connection, club_id: int, kind: str) -> dict | None:
+    row = db.one(
+        conn, "SELECT map_json FROM field_maps WHERE club_id=? AND kind=?", (club_id, kind)
+    )
     return json.loads(row["map_json"]) if row else None
 
 
-def import_clients(conn, club_id: int, path: str, mapping: dict | None = None) -> dict:
+def import_clients(
+    conn: sqlite3.Connection, club_id: int, path: str, mapping: dict | None = None
+) -> dict:
     rows, headers = sniff_csv(path)
     mapping = mapping or load_map(conn, club_id, "clients") or guess_map(headers, CLIENT_ALIASES)
     save_map(conn, club_id, "clients", mapping)
@@ -124,7 +176,11 @@ def import_clients(conn, club_id: int, path: str, mapping: dict | None = None) -
         except ValueError:
             level = None
         gender_raw = (r.get(mapping.get("gender", ""), "") or "").strip().lower()
-        gender = "f" if gender_raw[:1] in ("ж", "f", "w") else ("m" if gender_raw[:1] in ("м", "m") else None)
+        gender = (
+            "f"
+            if gender_raw[:1] in ("ж", "f", "w")
+            else ("m" if gender_raw[:1] in ("м", "m") else None)
+        )
 
         consent_raw = str(r.get(mapping.get("consent", ""), "") or "").strip().lower()
         consent = 0 if consent_raw in ("0", "нет", "no", "false", "отказ") else 1
@@ -132,7 +188,9 @@ def import_clients(conn, club_id: int, path: str, mapping: dict | None = None) -
         staff_raw = str(r.get(mapping.get("is_staff", ""), "") or "").strip().lower()
         is_staff = 1 if staff_raw in ("1", "да", "yes", "true", "тренер", "сотрудник") else 0
 
-        exists = db.one(conn, "SELECT id FROM contacts WHERE club_id=? AND external_id=?", (club_id, ext))
+        exists = db.one(
+            conn, "SELECT id FROM contacts WHERE club_id=? AND external_id=?", (club_id, ext)
+        )
         if exists:
             conn.execute(
                 """UPDATE contacts SET name=?, phone=?, level=?, gender=?, consent=?,
@@ -153,14 +211,18 @@ def import_clients(conn, club_id: int, path: str, mapping: dict | None = None) -
     return stats
 
 
-def import_bookings(conn, club_id: int, path: str, mapping: dict | None = None) -> dict:
+def import_bookings(
+    conn: sqlite3.Connection, club_id: int, path: str, mapping: dict | None = None
+) -> dict:
     rows, headers = sniff_csv(path)
     mapping = mapping or load_map(conn, club_id, "bookings") or guess_map(headers, BOOKING_ALIASES)
     save_map(conn, club_id, "bookings", mapping)
 
     id_index = {
         r["external_id"]: r["id"]
-        for r in db.all_rows(conn, "SELECT id, external_id FROM contacts WHERE club_id=?", (club_id,))
+        for r in db.all_rows(
+            conn, "SELECT id, external_id FROM contacts WHERE club_id=?", (club_id,)
+        )
     }
 
     stats = {"rows": len(rows), "inserted": 0, "skipped_no_client": 0, "skipped_no_date": 0}
@@ -187,9 +249,21 @@ def import_bookings(conn, club_id: int, path: str, mapping: dict | None = None) 
         try:
             conn.execute(
                 """INSERT OR IGNORE INTO bookings
-                   (club_id, external_id, contact_id, starts_at, ends_at, court_id, type, status, amount, coach_id)
+                       (club_id, external_id, contact_id, starts_at, ends_at, court_id,
+                        type, status, amount, coach_id)
                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                (club_id, ext, contact_id, iso(starts), iso(ends), court, btype, status, amount, coach),
+                (
+                    club_id,
+                    ext,
+                    contact_id,
+                    iso(starts),
+                    iso(ends),
+                    court,
+                    btype,
+                    status,
+                    amount,
+                    coach,
+                ),
             )
             stats["inserted"] += 1
         except Exception:

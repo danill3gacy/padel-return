@@ -3,14 +3,17 @@
 Запуск: PADEL_TG_TOKEN=... python -m padelreturn.bot --club "Падел Фили"
 Работает на long-polling, без вебхуков и без зависимостей.
 """
+
 from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Any
 
 from . import attribution, db, inbox
 from . import campaign as camp_mod
@@ -21,7 +24,7 @@ class TG:
     def __init__(self, token: str):
         self.base = f"https://api.telegram.org/bot{token}"
 
-    def call(self, method: str, **params):
+    def call(self, method: str, **params: Any) -> Any:
         url = f"{self.base}/{method}"
         data = json.dumps(params).encode()
         req = urllib.request.Request(url, data=data, headers={"content-type": "application/json"})
@@ -32,9 +35,13 @@ class TG:
             print(f"[tg] {method}: {e}")
             return {"ok": False}
 
-    def send(self, chat_id, text, keyboard=None):
-        params = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-                  "disable_web_page_preview": True}
+    def send(self, chat_id: int | str, text: str, keyboard: list | None = None) -> Any:
+        params: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
         if keyboard:
             params["reply_markup"] = {"inline_keyboard": keyboard}
         return self.call("sendMessage", **params)
@@ -50,22 +57,30 @@ HELP = (
 )
 
 
-def fmt_task(t) -> tuple[str, list]:
+def fmt_task(t: sqlite3.Row) -> tuple[str, list]:
     p = json.loads(t["payload_json"] or "{}")
     if t["kind"] == "confirm_booking":
-        text = (f"<b>Подтвердить бронь</b>\n"
-                f"{t['name']} · {t['phone']}\n"
-                f"{p.get('when')} · корт {p.get('court')} · {int(p.get('price', 0))} ₽\n"
-                f"мест в игре: {p.get('seats')}")
+        text = (
+            f"<b>Подтвердить бронь</b>\n"
+            f"{t['name']} · {t['phone']}\n"
+            f"{p.get('when')} · корт {p.get('court')} · {int(p.get('price', 0))} ₽\n"
+            f"мест в игре: {p.get('seats')}"
+        )
     else:
-        text = (f"<b>Нужен человек</b>\n{t['name']} · {t['phone']}\n"
-                f"{p.get('note')}\n\n«{p.get('text', '')}»")
-    kb = [[{"text": "Подтвердить", "callback_data": f"done:{t['id']}"},
-           {"text": "Отклонить", "callback_data": f"skip:{t['id']}"}]]
+        text = (
+            f"<b>Нужен человек</b>\n{t['name']} · {t['phone']}\n"
+            f"{p.get('note')}\n\n«{p.get('text', '')}»"
+        )
+    kb = [
+        [
+            {"text": "Подтвердить", "callback_data": f"done:{t['id']}"},
+            {"text": "Отклонить", "callback_data": f"skip:{t['id']}"},
+        ]
+    ]
     return text, kb
 
 
-def run(club: str, db_path: str, campaign_id: int | None):
+def run(club: str, db_path: str, campaign_id: int | None) -> None:
     cfg = CONFIG
     if not cfg.tg_bot_token:
         raise SystemExit("Нет PADEL_TG_TOKEN")
@@ -75,10 +90,12 @@ def run(club: str, db_path: str, campaign_id: int | None):
     offset = 0
     print(f"Админ-бот запущен для клуба «{club}».")
 
-    def current_campaign():
+    def current_campaign() -> int | None:
         if campaign_id:
             return campaign_id
-        row = db.one(conn, "SELECT id FROM campaigns WHERE club_id=? ORDER BY id DESC LIMIT 1", (club_id,))
+        row = db.one(
+            conn, "SELECT id FROM campaigns WHERE club_id=? ORDER BY id DESC LIMIT 1", (club_id,)
+        )
         return row["id"] if row else None
 
     while True:
@@ -90,11 +107,18 @@ def run(club: str, db_path: str, campaign_id: int | None):
                 cq = u["callback_query"]
                 action, _, tid = cq["data"].partition(":")
                 inbox.resolve_task(conn, int(tid), actor=str(cq["from"].get("username", "admin")))
-                tg.call("answerCallbackQuery", callback_query_id=cq["id"],
-                        text="Готово" if action == "done" else "Отклонено")
-                tg.call("editMessageText", chat_id=cq["message"]["chat"]["id"],
-                        message_id=cq["message"]["message_id"],
-                        text=cq["message"]["text"] + ("\n\n✓ подтверждено" if action == "done" else "\n\n× отклонено"))
+                tg.call(
+                    "answerCallbackQuery",
+                    callback_query_id=cq["id"],
+                    text="Готово" if action == "done" else "Отклонено",
+                )
+                tg.call(
+                    "editMessageText",
+                    chat_id=cq["message"]["chat"]["id"],
+                    message_id=cq["message"]["message_id"],
+                    text=cq["message"]["text"]
+                    + ("\n\n✓ подтверждено" if action == "done" else "\n\n× отклонено"),
+                )
                 continue
 
             msg = u.get("message") or {}
@@ -124,24 +148,32 @@ def run(club: str, db_path: str, campaign_id: int | None):
                     tg.send(chat, body, kb)
             elif text == "/stats" and cid:
                 s = camp_mod.stats(conn, cid)
-                tg.send(chat, (
-                    f"<b>Кампания #{cid}</b>\n"
-                    f"аудитория: {s['audience']} (контроль {s['control']})\n"
-                    f"отправлено: {s['messages_sent']}\n"
-                    f"ответили: {s['replied']} ({s['reply_rate']}%)\n"
-                    f"согласились: {s['accepted']} ({s['accept_rate']}%)\n"
-                    f"отписались: {s['stopped']} ({s['stop_rate']}%)\n"
-                    f"расходы: {s['cost']:.0f} ₽"))
+                tg.send(
+                    chat,
+                    (
+                        f"<b>Кампания #{cid}</b>\n"
+                        f"аудитория: {s['audience']} (контроль {s['control']})\n"
+                        f"отправлено: {s['messages_sent']}\n"
+                        f"ответили: {s['replied']} ({s['reply_rate']}%)\n"
+                        f"согласились: {s['accepted']} ({s['accept_rate']}%)\n"
+                        f"отписались: {s['stopped']} ({s['stop_rate']}%)\n"
+                        f"расходы: {s['cost']:.0f} ₽"
+                    ),
+                )
             elif text == "/money" and cid:
                 a = attribution.report(conn, cid, cfg)
-                tg.send(chat, (
-                    f"<b>Результат кампании #{cid}</b>\n"
-                    f"вернулось: {a['treated']['returned']} из {a['treated']['n']} "
-                    f"({a['treated']['rate']}%)\n"
-                    f"контроль: {a['control']['rate']}%\n"
-                    f"прирост: +{a['uplift_pp']} п.п.\n"
-                    f"инкрементальная выручка: {a['incremental_revenue']:.0f} ₽\n"
-                    f"к оплате: {a['fee']:.0f} ₽"))
+                tg.send(
+                    chat,
+                    (
+                        f"<b>Результат кампании #{cid}</b>\n"
+                        f"вернулось: {a['treated']['returned']} из {a['treated']['n']} "
+                        f"({a['treated']['rate']}%)\n"
+                        f"контроль: {a['control']['rate']}%\n"
+                        f"прирост: +{a['uplift_pp']} п.п.\n"
+                        f"инкрементальная выручка: {a['incremental_revenue']:.0f} ₽\n"
+                        f"к оплате: {a['fee']:.0f} ₽"
+                    ),
+                )
             elif text == "/approve" and cid:
                 n = camp_mod.approve(conn, cid)
                 tg.send(chat, f"Подтверждено сообщений: {n}")

@@ -1,10 +1,11 @@
 """SQLite-хранилище. Схема из PRD, без ORM — чтобы проект запускался где угодно."""
+
 from __future__ import annotations
 
 import json
 import os
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
@@ -245,7 +246,7 @@ def init_db(path: str | None = None) -> sqlite3.Connection:
 
 
 @contextmanager
-def tx(conn: sqlite3.Connection):
+def tx(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     try:
         yield conn
         conn.commit()
@@ -254,12 +255,12 @@ def tx(conn: sqlite3.Connection):
         raise
 
 
-def one(conn, sql: str, params: Iterable = ()) -> sqlite3.Row | None:
+def one(conn: sqlite3.Connection, sql: str, params: Iterable = ()) -> sqlite3.Row | None:
     cur = conn.execute(sql, tuple(params))
     return cur.fetchone()
 
 
-def must(conn, sql: str, params: Iterable = ()) -> sqlite3.Row:
+def must(conn: sqlite3.Connection, sql: str, params: Iterable = ()) -> sqlite3.Row:
     """Строка, которая обязана существовать.
 
     Явная ошибка вместо `TypeError: 'NoneType' is not subscriptable` через
@@ -271,25 +272,25 @@ def must(conn, sql: str, params: Iterable = ()) -> sqlite3.Row:
     return row
 
 
-def all_rows(conn, sql: str, params: Iterable = ()) -> list[sqlite3.Row]:
+def all_rows(conn: sqlite3.Connection, sql: str, params: Iterable = ()) -> list[sqlite3.Row]:
     return conn.execute(sql, tuple(params)).fetchall()
 
 
-def scalar(conn, sql: str, params: Iterable = (), default: Any = 0):
+def scalar(conn: sqlite3.Connection, sql: str, params: Iterable = (), default: Any = 0) -> Any:
     row = one(conn, sql, params)
     if row is None or row[0] is None:
         return default
     return row[0]
 
 
-def log(conn, actor: str, action: str, details: Any = None) -> None:
+def log(conn: sqlite3.Connection, actor: str, action: str, details: Any = None) -> None:
     conn.execute(
         "INSERT INTO audit (actor, action, details) VALUES (?,?,?)",
         (actor, action, json.dumps(details, ensure_ascii=False) if details is not None else None),
     )
 
 
-def get_or_create_club(conn, name: str, settings: dict | None = None) -> int:
+def get_or_create_club(conn: sqlite3.Connection, name: str, settings: dict | None = None) -> int:
     row = one(conn, "SELECT id FROM clubs WHERE name = ?", (name,))
     if row:
         if settings:
@@ -304,9 +305,10 @@ def get_or_create_club(conn, name: str, settings: dict | None = None) -> int:
         (name, json.dumps(settings or {}, ensure_ascii=False)),
     )
     conn.commit()
+    assert cur.lastrowid is not None
     return cur.lastrowid
 
 
-def club_settings(conn, club_id: int) -> dict:
+def club_settings(conn: sqlite3.Connection, club_id: int) -> dict:
     row = one(conn, "SELECT settings_json FROM clubs WHERE id = ?", (club_id,))
     return json.loads(row["settings_json"]) if row and row["settings_json"] else {}

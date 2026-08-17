@@ -4,18 +4,28 @@
 без эмодзи, без восклицательных знаков, без слов "акция/скидка/уникальный",
 причина ухода прямо не называется, в конце — один конкретный вопрос.
 """
+
 from __future__ import annotations
 
 import random
 import re
+import sqlite3
 
 from .config import Config
 from .llm import LLM
 from .utils import first_name
 
 BANNED = [
-    "акци", "спецпредложен", "уникальн", "спешите", "не упустите", "только сегодня",
-    "выгодное предложение", "дорогой клиент", "уважаемый клиент", "мы соскучились",
+    "акци",
+    "спецпредложен",
+    "уникальн",
+    "спешите",
+    "не упустите",
+    "только сегодня",
+    "выгодное предложение",
+    "дорогой клиент",
+    "уважаемый клиент",
+    "мы соскучились",
 ]
 BANNED_CHARS = "!"
 
@@ -58,8 +68,10 @@ def offer_text(offer: dict, club_name: str) -> str:
     if k == "usual_slot":
         return f"{when} свободен корт в ваше обычное время"
     if k == "tournament":
-        return (f"{when} проводим Американо — пары меняются каждые несколько геймов, "
-                "поэтому приходить одному нормально")
+        return (
+            f"{when} проводим Американо — пары меняются каждые несколько геймов, "
+            "поэтому приходить одному нормально"
+        )
     if k == "beginner":
         return f"{when} есть занятие для начинающих с тренером, небольшая группа"
     if k == "offpeak":
@@ -145,7 +157,9 @@ def lower_first(s: str) -> str:
     return s[:1].lower() + s[1:] if s else s
 
 
-def render_template(row, offer: dict, club_name: str, touch: int, rnd: random.Random) -> str:
+def render_template(
+    row: sqlite3.Row, offer: dict, club_name: str, touch: int, rnd: random.Random
+) -> str:
     name = first_name(row["name"]) or "Здравствуйте"
     otext = offer_text(offer, club_name)
     if touch == 3:
@@ -156,8 +170,15 @@ def render_template(row, offer: dict, club_name: str, touch: int, rnd: random.Ra
     return rnd.choice(pool).format(name=name, offer=cap(otext))
 
 
-def generate(row, offer: dict, club_name: str, cfg: Config, touch: int = 1,
-             llm: LLM | None = None, seed: int | None = None) -> tuple[str, str]:
+def generate(
+    row: sqlite3.Row,
+    offer: dict,
+    club_name: str,
+    cfg: Config,
+    touch: int = 1,
+    llm: LLM | None = None,
+    seed: int | None = None,
+) -> tuple[str, str]:
     """Возвращает (текст, источник). Источник: llm | template | template_fallback."""
     rnd = random.Random(seed if seed is not None else row["contact_id"] * 31 + touch)
     fallback = render_template(row, offer, club_name, touch, rnd)
@@ -166,6 +187,7 @@ def generate(row, offer: dict, club_name: str, cfg: Config, touch: int = 1,
         return fallback, "template"
 
     from .utils import RU_DOW
+
     usual = "—"
     if row["usual_dow"] is not None and row["usual_hour"] is not None:
         usual = f"по {RU_DOW[row['usual_dow']]}м в {row['usual_hour']}:00"

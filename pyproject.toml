@@ -1,4 +1,5 @@
 
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
@@ -7,7 +8,16 @@ target-version = "py311"
 select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
 # Храповик: правила ниже выключены, чтобы внедрение шло без большого рефакторинга.
 # Убираем по одному — каждый раз это отдельный небольшой коммит.
-ignore = ["E501", "B007", "B905", "SIM115", "SIM212"]
+ignore = ["B007", "B905", "SIM115", "SIM212"]
+
+[tool.ruff.lint.pycodestyle]
+# Форматтер переносит код по 100; порог ошибки чуть выше — для строк и SQL,
+# которые он разрывать не умеет и не должен.
+max-line-length = 110
+
+[tool.ruff.lint.per-file-ignores]
+# HTML-шаблон отчёта: разрывать строки CSS и разметки — хуже, чем длинная строка.
+"padelreturn/report.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -15,7 +25,5 @@ files = ["padelreturn"]
 ignore_missing_imports = true
 warn_redundant_casts = true
 warn_unused_ignores = true
-# Следующие ступени строгости — включать по одной, когда предыдущая держится:
-# disallow_untyped_defs = true
-# disallow_any_generics = true
-# strict = true
+disallow_untyped_defs = true
+# Следующая ступень: disallow_any_generics, затем strict = true

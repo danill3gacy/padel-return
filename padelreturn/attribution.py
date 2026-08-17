@@ -4,8 +4,10 @@
 у того, кто был sleeping. Деньги считаем за 60 дней. Платит клуб только за прирост
 над контрольной группой.
 """
+
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta
 
 from . import db
@@ -13,7 +15,13 @@ from .config import Config
 from .utils import iso, parse_dt
 
 
-def compute(conn, club_id: int, campaign_id: int, cfg: Config, as_of: datetime | None = None) -> dict:
+def compute(
+    conn: sqlite3.Connection,
+    club_id: int,
+    campaign_id: int,
+    cfg: Config,
+    as_of: datetime | None = None,
+) -> dict:
     as_of = as_of or datetime.now()
     conn.execute("DELETE FROM attributions WHERE campaign_id=?", (campaign_id,))
 
@@ -66,15 +74,23 @@ def compute(conn, club_id: int, campaign_id: int, cfg: Config, as_of: datetime |
             """INSERT INTO attributions (campaign_id, contact_id, is_control, first_touch_at,
                    returned_at, revenue_60d, bookings_60d, second_booking)
                VALUES (?,?,?,?,?,?,?,?)""",
-            (campaign_id, r["contact_id"], r["is_control"], iso(anchor), returned_at,
-             revenue, n_bookings, 1 if n_bookings >= 2 else 0),
+            (
+                campaign_id,
+                r["contact_id"],
+                r["is_control"],
+                iso(anchor),
+                returned_at,
+                revenue,
+                n_bookings,
+                1 if n_bookings >= 2 else 0,
+            ),
         )
 
     conn.commit()
     return report(conn, campaign_id, cfg)
 
 
-def report(conn, campaign_id: int, cfg: Config) -> dict:
+def report(conn: sqlite3.Connection, campaign_id: int, cfg: Config) -> dict:
     def agg(is_control: int) -> dict:
         row = db.must(
             conn,
@@ -120,7 +136,7 @@ def report(conn, campaign_id: int, cfg: Config) -> dict:
     }
 
 
-def returned_list(conn, campaign_id: int, limit: int = 200) -> list:
+def returned_list(conn: sqlite3.Connection, campaign_id: int, limit: int = 200) -> list:
     return db.all_rows(
         conn,
         """SELECT a.*, c.name, c.phone, s.segment, s.reason

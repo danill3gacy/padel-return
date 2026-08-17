@@ -1,4 +1,5 @@
 """Тонкая обёртка над LLM. Без ключа продукт работает — просто на правилах и шаблонах."""
+
 from __future__ import annotations
 
 import json

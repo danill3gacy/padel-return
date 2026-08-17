@@ -1,8 +1,11 @@
 """Оркестрация кампании: планирование касаний, волны, каденция, отправка с подтверждением."""
+
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timedelta
+from typing import Any
 
 from . import channels, db
 from . import offers as offers_mod
@@ -13,21 +16,34 @@ from .segmentation import audience
 from .utils import iso
 
 
-def create(conn, club_id: int, name: str, cfg: Config, config_overrides: dict | None = None) -> int:
+def create(
+    conn: sqlite3.Connection,
+    club_id: int,
+    name: str,
+    cfg: Config,
+    config_overrides: dict | None = None,
+) -> int:
     cur = conn.execute(
         "INSERT INTO campaigns (club_id, name, status, config_json) VALUES (?,?,?,?)",
         (club_id, name, "draft", json.dumps(config_overrides or {}, ensure_ascii=False)),
     )
     conn.commit()
+    assert cur.lastrowid is not None
     return cur.lastrowid
 
 
-def get(conn, campaign_id: int):
+def get(conn: sqlite3.Connection, campaign_id: int) -> sqlite3.Row | None:
     return db.one(conn, "SELECT * FROM campaigns WHERE id=?", (campaign_id,))
 
 
-def plan(conn, club_id: int, campaign_id: int, cfg: Config, as_of: datetime | None = None,
-         limit: int | None = None) -> dict:
+def plan(
+    conn: sqlite3.Connection,
+    club_id: int,
+    campaign_id: int,
+    cfg: Config,
+    as_of: datetime | None = None,
+    limit: int | None = None,
+) -> dict:
     """Готовит первое касание для всей аудитории: оффер + текст + время отправки.
 
     Ничего не отправляет. Всё, что здесь создано, можно вычитать глазами.
@@ -61,7 +77,7 @@ def plan(conn, club_id: int, campaign_id: int, cfg: Config, as_of: datetime | No
         body = with_footer(text, 1)
         stats[source if source in ("llm", "template") else "template"] += 1
 
-        contact = db.one(conn, "SELECT * FROM contacts WHERE id=?", (row["contact_id"],))
+        contact = db.must(conn, "SELECT * FROM contacts WHERE id=?", (row["contact_id"],))
         ch = channels.pick(cfg, contact)
         scheduled = _schedule_at(as_of + timedelta(days=day_offset), cfg)
 
@@ -69,9 +85,17 @@ def plan(conn, club_id: int, campaign_id: int, cfg: Config, as_of: datetime | No
             """INSERT INTO messages (campaign_id, contact_id, offer_id, touch_no, direction,
                                      channel, template_key, body, status, scheduled_at)
                VALUES (?,?,?,?,'out',?,?,?,?,?)""",
-            (campaign_id, row["contact_id"], offer["id"], 1, ch.name,
-             f"return_touch1_{offer['kind']}", body,
-             "pending_approval" if cfg.require_approval else "queued", iso(scheduled)),
+            (
+                campaign_id,
+                row["contact_id"],
+                offer["id"],
+                1,
+                ch.name,
+                f"return_touch1_{offer['kind']}",
+                body,
+                "pending_approval" if cfg.require_approval else "queued",
+                iso(scheduled),
+            ),
         )
         stats["planned"] += 1
 
@@ -94,7 +118,7 @@ def _schedule_at(day: datetime, cfg: Config) -> datetime:
     return day
 
 
-def preview(conn, campaign_id: int, n: int = 30) -> list[dict]:
+def preview(conn: sqlite3.Connection, campaign_id: int, n: int = 30) -> list[dict]:
     rows = db.all_rows(
         conn,
         """SELECT m.id, m.body, m.channel, m.status, m.touch_no, m.scheduled_at,
@@ -116,7 +140,12 @@ def preview(conn, campaign_id: int, n: int = 30) -> list[dict]:
     return out
 
 
-def approve(conn, campaign_id: int, message_ids: list[int] | None = None, actor: str = "admin") -> int:
+def approve(
+    conn: sqlite3.Connection,
+    campaign_id: int,
+    message_ids: list[int] | None = None,
+    actor: str = "admin",
+) -> int:
     if message_ids:
         q = ",".join("?" * len(message_ids))
         cur = conn.execute(
@@ -136,8 +165,13 @@ def approve(conn, campaign_id: int, message_ids: list[int] | None = None, actor:
     return cur.rowcount
 
 
-def run(conn, campaign_id: int, cfg: Config, as_of: datetime | None = None,
-        max_send: int | None = None) -> dict:
+def run(
+    conn: sqlite3.Connection,
+    campaign_id: int,
+    cfg: Config,
+    as_of: datetime | None = None,
+    max_send: int | None = None,
+) -> dict:
     """Отправляет всё, что подтверждено и подошло по времени."""
     as_of = as_of or datetime.now()
     limit = max_send or cfg.wave_size
@@ -154,10 +188,12 @@ def run(conn, campaign_id: int, cfg: Config, as_of: datetime | None = None,
 
     for m in rows:
         if m["stop_list"]:
-            conn.execute("UPDATE messages SET status='skipped', error='стоп-лист' WHERE id=?", (m["id"],))
+            conn.execute(
+                "UPDATE messages SET status='skipped', error='стоп-лист' WHERE id=?", (m["id"],)
+            )
             stats["skipped_stop"] += 1
             continue
-        contact = db.one(conn, "SELECT * FROM contacts WHERE id=?", (m["contact_id"],))
+        contact = db.must(conn, "SELECT * FROM contacts WHERE id=?", (m["contact_id"],))
         ch = channels.pick(cfg, contact)
         res = ch.send(contact, m["body"], m["template_key"])
         if res.ok:
@@ -166,7 +202,8 @@ def run(conn, campaign_id: int, cfg: Config, as_of: datetime | None = None,
                 (res.channel, iso(as_of), res.cost, m["id"]),
             )
             conn.execute(
-                """INSERT OR IGNORE INTO conversations (club_id, contact_id, campaign_id, channel, state, last_msg_at)
+                """INSERT OR IGNORE INTO conversations
+                       (club_id, contact_id, campaign_id, channel, state, last_msg_at)
                    VALUES ((SELECT club_id FROM campaigns WHERE id=?), ?, ?, ?, 'awaiting_reply', ?)""",
                 (campaign_id, m["contact_id"], campaign_id, res.channel, iso(as_of)),
             )
@@ -178,16 +215,23 @@ def run(conn, campaign_id: int, cfg: Config, as_of: datetime | None = None,
             )
             stats["failed"] += 1
 
-    conn.execute("UPDATE campaigns SET status='running', started_at=COALESCE(started_at,?) WHERE id=?",
-                 (iso(as_of), campaign_id))
+    conn.execute(
+        "UPDATE campaigns SET status='running', started_at=COALESCE(started_at,?) WHERE id=?",
+        (iso(as_of), campaign_id),
+    )
     conn.commit()
     db.log(conn, "campaign", "run", {"campaign_id": campaign_id, **stats})
     conn.commit()
     return stats
 
 
-def schedule_followups(conn, club_id: int, campaign_id: int, cfg: Config,
-                       as_of: datetime | None = None) -> dict:
+def schedule_followups(
+    conn: sqlite3.Connection,
+    club_id: int,
+    campaign_id: int,
+    cfg: Config,
+    as_of: datetime | None = None,
+) -> dict:
     """Касания 2 и 3 — только тем, кто не ответил. Ответил что угодно — автоматика молчит."""
     as_of = as_of or datetime.now()
     club = db.must(conn, "SELECT * FROM clubs WHERE id=?", (club_id,))
@@ -225,20 +269,40 @@ def schedule_followups(conn, club_id: int, campaign_id: int, cfg: Config,
             if not row:
                 continue
             if touch == 2:
-                offer = offers_mod.plan_offer(conn, club_id, campaign_id, row, cfg, slots, as_of=as_of)
+                offer = offers_mod.plan_offer(
+                    conn, club_id, campaign_id, row, cfg, slots, as_of=as_of
+                )
             else:
-                offer = {"id": None, "kind": "closing", "kind_title": "закрытие", "when_ru": "",
-                         "seats_left": 0, "seats_filled": 0, "price": 0,
-                         "datetime": as_of, "court_id": "", "seats_total": 0,
-                         "level_min": 0, "level_max": 0}
+                offer = {
+                    "id": None,
+                    "kind": "closing",
+                    "kind_title": "закрытие",
+                    "when_ru": "",
+                    "seats_left": 0,
+                    "seats_filled": 0,
+                    "price": 0,
+                    "datetime": as_of,
+                    "court_id": "",
+                    "seats_total": 0,
+                    "level_min": 0,
+                    "level_max": 0,
+                }
             text, _ = generate(row, offer, club["name"], cfg, touch=touch, llm=llm)
             conn.execute(
                 """INSERT OR IGNORE INTO messages (campaign_id, contact_id, offer_id, touch_no,
                        direction, channel, template_key, body, status, scheduled_at)
                    VALUES (?,?,?,?, 'out', ?, ?, ?, ?, ?)""",
-                (campaign_id, cand["contact_id"], offer["id"], touch, cfg.default_channel,
-                 f"return_touch{touch}", with_footer(text, touch),
-                 "pending_approval" if cfg.require_approval else "queued", iso(as_of)),
+                (
+                    campaign_id,
+                    cand["contact_id"],
+                    offer["id"],
+                    touch,
+                    cfg.default_channel,
+                    f"return_touch{touch}",
+                    with_footer(text, touch),
+                    "pending_approval" if cfg.require_approval else "queued",
+                    iso(as_of),
+                ),
             )
             stats[f"touch{touch}"] += 1
 
@@ -248,23 +312,42 @@ def schedule_followups(conn, club_id: int, campaign_id: int, cfg: Config,
     return stats
 
 
-def stats(conn, campaign_id: int) -> dict:
-    def s(sql, params=(), default=0):
+def stats(conn: sqlite3.Connection, campaign_id: int) -> dict:
+    def s(sql: str, params: tuple = (), default: Any = 0) -> Any:
         return db.scalar(conn, sql, params, default)
 
-    sent = s("SELECT COUNT(*) FROM messages WHERE campaign_id=? AND direction='out' AND status='sent'", (campaign_id,))
-    planned = s("SELECT COUNT(*) FROM messages WHERE campaign_id=? AND direction='out'", (campaign_id,))
-    replied = s("SELECT COUNT(DISTINCT contact_id) FROM inbound WHERE campaign_id=?", (campaign_id,))
+    sent = s(
+        "SELECT COUNT(*) FROM messages WHERE campaign_id=? AND direction='out' AND status='sent'",
+        (campaign_id,),
+    )
+    planned = s(
+        "SELECT COUNT(*) FROM messages WHERE campaign_id=? AND direction='out'", (campaign_id,)
+    )
+    replied = s(
+        "SELECT COUNT(DISTINCT contact_id) FROM inbound WHERE campaign_id=?", (campaign_id,)
+    )
     accepted = s(
         """SELECT COUNT(DISTINCT os.contact_id) FROM offer_seats os
            JOIN offers o ON o.id=os.offer_id WHERE o.campaign_id=? AND os.state='accepted'""",
         (campaign_id,),
     )
-    stopped = s("SELECT COUNT(*) FROM inbound WHERE campaign_id=? AND intent='stop'", (campaign_id,))
-    negative = s("SELECT COUNT(*) FROM inbound WHERE campaign_id=? AND intent='negative'", (campaign_id,))
+    stopped = s(
+        "SELECT COUNT(*) FROM inbound WHERE campaign_id=? AND intent='stop'", (campaign_id,)
+    )
+    negative = s(
+        "SELECT COUNT(*) FROM inbound WHERE campaign_id=? AND intent='negative'", (campaign_id,)
+    )
     cost = s("SELECT COALESCE(SUM(cost),0) FROM messages WHERE campaign_id=?", (campaign_id,), 0.0)
-    audience_n = s("SELECT COUNT(*) FROM segments WHERE campaign_id=? AND sleeping=1 AND is_control=0 AND segment IS NOT NULL AND segment<>'E'", (campaign_id,))
-    control_n = s("SELECT COUNT(*) FROM segments WHERE campaign_id=? AND sleeping=1 AND is_control=1", (campaign_id,))
+    audience_n = s(
+        """SELECT COUNT(*) FROM segments
+           WHERE campaign_id=? AND sleeping=1 AND is_control=0
+                 AND segment IS NOT NULL AND segment<>'E'""",
+        (campaign_id,),
+    )
+    control_n = s(
+        "SELECT COUNT(*) FROM segments WHERE campaign_id=? AND sleeping=1 AND is_control=1",
+        (campaign_id,),
+    )
 
     return {
         "audience": audience_n,

@@ -3,7 +3,10 @@
 Правило из PRD: при confidence < 0.5 причина принудительно становится 'неизвестно'.
 Уверенная неправда хуже честной нейтральности.
 """
+
 from __future__ import annotations
+
+import sqlite3
 
 from . import db
 from .config import Config
@@ -12,14 +15,25 @@ from .llm import LLM
 from .utils import RU_DOW, parse_dt
 
 REASONS = [
-    "нет_партнёров", "сменился_график", "ушёл_тренер", "слишком_дорого",
-    "не_понравился_первый_опыт", "уровень_не_совпал", "травма_пауза",
-    "сезонность", "ушёл_в_другой_клуб", "неизвестно",
+    "нет_партнёров",
+    "сменился_график",
+    "ушёл_тренер",
+    "слишком_дорого",
+    "не_понравился_первый_опыт",
+    "уровень_не_совпал",
+    "травма_пауза",
+    "сезонность",
+    "ушёл_в_другой_клуб",
+    "неизвестно",
 ]
 
 OFFERS = [
-    "собранная_игра", "новичковая_сессия", "слот_в_привычное_время",
-    "другой_тренер", "офф-пик_цена", "турнир_американо",
+    "собранная_игра",
+    "новичковая_сессия",
+    "слот_в_привычное_время",
+    "другой_тренер",
+    "офф-пик_цена",
+    "турнир_американо",
 ]
 
 MIN_CONFIDENCE = 0.5
@@ -42,14 +56,16 @@ PROMPT = """По истории клиента определи наиболее
 Не выдумывай фактов, которых нет в данных. Если данных мало — ставь confidence ниже 0.5."""
 
 
-def build_facts(conn, club_id: int, row, cfg: Config) -> str:
+def build_facts(conn: sqlite3.Connection, club_id: int, row: sqlite3.Row, cfg: Config) -> str:
     partners = top_partners(conn, club_id, row["contact_id"], limit=3)
     p_lines = []
     for p in partners:
         gone = ""
         if p["days_since_last"] is not None:
             thr = max(cfg.sleeping_min_days, (p["avg_interval"] or 0) * cfg.sleeping_interval_mult)
-            gone = " — тоже перестал ходить" if p["days_since_last"] > thr else " — продолжает ходить"
+            gone = (
+                " — тоже перестал ходить" if p["days_since_last"] > thr else " — продолжает ходить"
+            )
         p_lines.append(f"{p['name']} ({p['games_count']} совместных игр{gone})")
 
     coach_status = ""
@@ -60,29 +76,35 @@ def build_facts(conn, club_id: int, row, cfg: Config) -> str:
                AND julianday('now') - julianday(starts_at) < 45""",
             (club_id, row["main_coach"]),
         )
-        coach_status = f"{row['main_coach']} ({'работает' if active else 'больше не ведёт занятия'})"
+        coach_status = (
+            f"{row['main_coach']} ({'работает' if active else 'больше не ведёт занятия'})"
+        )
 
     dow = RU_DOW.get(row["usual_dow"], "—") if row["usual_dow"] is not None else "—"
     hour = f"{row['usual_hour']}:00" if row["usual_hour"] is not None else "—"
     last = parse_dt(row["last_visit"])
     avg_check = (row["revenue_total"] or 0) / row["visits_total"] if row["visits_total"] else 0
 
-    return "\n".join([
-        f"Имя: {row['name']}",
-        f"Всего визитов: {row['visits_total']}",
-        f"Последний визит: {last.strftime('%d.%m.%Y') if last else '—'} ({row['days_since_last']} дней назад)",
-        f"Обычное время игры: {dow}, {hour}",
-        f"Средний интервал между визитами: {round(row['avg_interval']) if row['avg_interval'] else '—'} дней",
-        f"Доля тренировок: {round((row['lessons_share'] or 0) * 100)}%",
-        f"Турниров сыграно: {row['tournaments'] or 0}",
-        f"Постоянные партнёры: {'; '.join(p_lines) if p_lines else 'нет'}",
-        f"Тренер: {coach_status or 'не занимался'}",
-        f"Средний чек: {round(avg_check)} ₽",
-        f"Доля неявок: {round((row['no_show_rate'] or 0) * 100)}%",
-    ])
+    return "\n".join(
+        [
+            f"Имя: {row['name']}",
+            f"Всего визитов: {row['visits_total']}",
+            f"Последний визит: {last.strftime('%d.%m.%Y') if last else '—'} "
+            f"({row['days_since_last']} дней назад)",
+            f"Обычное время игры: {dow}, {hour}",
+            f"Средний интервал между визитами: "
+            f"{round(row['avg_interval']) if row['avg_interval'] else '—'} дней",
+            f"Доля тренировок: {round((row['lessons_share'] or 0) * 100)}%",
+            f"Турниров сыграно: {row['tournaments'] or 0}",
+            f"Постоянные партнёры: {'; '.join(p_lines) if p_lines else 'нет'}",
+            f"Тренер: {coach_status or 'не занимался'}",
+            f"Средний чек: {round(avg_check)} ₽",
+            f"Доля неявок: {round((row['no_show_rate'] or 0) * 100)}%",
+        ]
+    )
 
 
-def infer_rules(conn, club_id: int, row, cfg: Config) -> dict:
+def infer_rules(conn: sqlite3.Connection, club_id: int, row: sqlite3.Row, cfg: Config) -> dict:
     """Детерминированный фолбэк. Работает без LLM и служит sanity-check для неё."""
     visits = row["visits_total"] or 0
 
@@ -94,7 +116,10 @@ def infer_rules(conn, club_id: int, row, cfg: Config) -> dict:
                 return {
                     "reason": "нет_партнёров",
                     "confidence": 0.72,
-                    "evidence": f"постоянный партнёр {p['name']} ({p['games_count']} игр) тоже перестал ходить",
+                    "evidence": (
+                        f"постоянный партнёр {p['name']} "
+                        f"({p['games_count']} игр) тоже перестал ходить"
+                    ),
                     "best_offer": "собранная_игра",
                 }
 
@@ -109,7 +134,10 @@ def infer_rules(conn, club_id: int, row, cfg: Config) -> dict:
             return {
                 "reason": "ушёл_тренер",
                 "confidence": 0.68,
-                "evidence": f"занимался в основном с тренером {row['main_coach']}, который больше не ведёт занятия",
+                "evidence": (
+                    f"занимался в основном с тренером {row['main_coach']}, "
+                    f"который больше не ведёт занятия"
+                ),
                 "best_offer": "другой_тренер",
             }
 
@@ -142,7 +170,7 @@ def infer_rules(conn, club_id: int, row, cfg: Config) -> dict:
                 "reason": "сменился_график",
                 "confidence": 0.6,
                 "evidence": f"играл по {RU_DOW[row['usual_dow']]} в {row['usual_hour']}:00, "
-                            "в это время игр больше нет",
+                "в это время игр больше нет",
                 "best_offer": "слот_в_привычное_время",
             }
 
@@ -162,7 +190,9 @@ def infer_rules(conn, club_id: int, row, cfg: Config) -> dict:
     }
 
 
-def infer(conn, club_id: int, campaign_id: int, cfg: Config, use_llm: bool = True) -> dict:
+def infer(
+    conn: sqlite3.Connection, club_id: int, campaign_id: int, cfg: Config, use_llm: bool = True
+) -> dict:
     from .segmentation import audience
 
     llm = LLM(cfg)

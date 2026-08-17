@@ -4,8 +4,10 @@
 Пул кандидатов копится по ходу кампании, поэтому оффер усиливается сам:
 "свободный слот" -> "уже двое вашего уровня, нужен третий" -> "собранная игра".
 """
+
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta
 
 from . import db
@@ -43,8 +45,13 @@ SEGMENT_DEFAULT = {
 }
 
 
-def free_slots(conn, club_id: int, cfg: Config, horizon_days: int | None = None,
-               as_of: datetime | None = None) -> list[dict]:
+def free_slots(
+    conn: sqlite3.Connection,
+    club_id: int,
+    cfg: Config,
+    horizon_days: int | None = None,
+    as_of: datetime | None = None,
+) -> list[dict]:
     """Свободные слоты на горизонте: часы работы минус занятые брони.
 
     В v1 нет интеграции с CRM, поэтому расписание считается по настройкам клуба
@@ -55,7 +62,7 @@ def free_slots(conn, club_id: int, cfg: Config, horizon_days: int | None = None,
     st = db.club_settings(conn, club_id)
     open_h = int(st.get("open_hour", 7))
     close_h = int(st.get("close_hour", 23))
-    courts = st.get("courts") or [f"C{i+1}" for i in range(int(st.get("courts_count", 4)))]
+    courts = st.get("courts") or [f"C{i + 1}" for i in range(int(st.get("courts_count", 4)))]
     peak = set(st.get("peak_hours", list(range(18, 23))))
 
     busy = set()
@@ -76,23 +83,38 @@ def free_slots(conn, club_id: int, cfg: Config, horizon_days: int | None = None,
                 dt = datetime(day.year, day.month, day.day, hour)
                 if (court, dt.isoformat(sep=" ")[:13]) in busy:
                     continue
-                slots.append({
-                    "datetime": dt,
-                    "court_id": court,
-                    "is_peak": hour in peak,
-                    "price": float(st.get("price_peak", 4200) if hour in peak else st.get("price_offpeak", 2800)),
-                })
+                slots.append(
+                    {
+                        "datetime": dt,
+                        "court_id": court,
+                        "is_peak": hour in peak,
+                        "price": float(
+                            st.get("price_peak", 4200)
+                            if hour in peak
+                            else st.get("price_offpeak", 2800)
+                        ),
+                    }
+                )
     return slots
 
 
-def _pick_slot(slots: list[dict], dow=None, hour=None, prefer_offpeak=True) -> dict | None:
+def _pick_slot(
+    slots: list[dict],
+    dow: int | None = None,
+    hour: int | None = None,
+    prefer_offpeak: bool = True,
+) -> dict | None:
     if not slots:
         return None
     if dow is not None and hour is not None:
         exact = [s for s in slots if s["datetime"].weekday() == dow and s["datetime"].hour == hour]
         if exact:
             return min(exact, key=lambda s: s["datetime"])
-        near = [s for s in slots if s["datetime"].weekday() == dow and abs(s["datetime"].hour - hour) <= 1]
+        near = [
+            s
+            for s in slots
+            if s["datetime"].weekday() == dow and abs(s["datetime"].hour - hour) <= 1
+        ]
         if near:
             return min(near, key=lambda s: s["datetime"])
     pool = [s for s in slots if not s["is_peak"]] if prefer_offpeak else slots
@@ -100,8 +122,15 @@ def _pick_slot(slots: list[dict], dow=None, hour=None, prefer_offpeak=True) -> d
     return min(pool, key=lambda s: s["datetime"])
 
 
-def plan_offer(conn, club_id: int, campaign_id: int, row, cfg: Config,
-               slots: list[dict], as_of: datetime | None = None) -> dict:
+def plan_offer(
+    conn: sqlite3.Connection,
+    club_id: int,
+    campaign_id: int,
+    row: sqlite3.Row,
+    cfg: Config,
+    slots: list[dict],
+    as_of: datetime | None = None,
+) -> dict:
     """Подбирает оффер для конкретного человека. Сначала — присоединиться к живому пулу."""
     as_of = as_of or datetime.now()
     level = row["level_proxy"] or 3.0
@@ -127,7 +156,9 @@ def plan_offer(conn, club_id: int, campaign_id: int, row, cfg: Config,
         return _offer_dict(conn, open_offer["id"])
 
     # 2. Иначе создаём новый под его сценарий
-    preferred = OFFER_BY_REASON.get(row["reason"] or "неизвестно") or SEGMENT_DEFAULT.get(row["segment"], ["assembling"])
+    preferred = OFFER_BY_REASON.get(row["reason"] or "неизвестно") or SEGMENT_DEFAULT.get(
+        row["segment"], ["assembling"]
+    )
     if row["best_offer"] == "слот_в_привычное_время":
         preferred = ["usual_slot"] + preferred
     elif row["best_offer"] == "турнир_американо":
@@ -146,18 +177,31 @@ def plan_offer(conn, club_id: int, campaign_id: int, row, cfg: Config,
         slot = _pick_slot(slots, row["usual_dow"], row["usual_hour"])
 
     if slot is None:
-        slot = {"datetime": as_of + timedelta(days=3), "court_id": "C1", "is_peak": False, "price": 2800}
+        slot = {
+            "datetime": as_of + timedelta(days=3),
+            "court_id": "C1",
+            "is_peak": False,
+            "price": 2800,
+        }
 
     seats = 8 if kind == "tournament" else cfg.seats_per_offer
     cur = conn.execute(
         """INSERT INTO offers (campaign_id, kind, slot_datetime, court_id, level_min, level_max,
                                seats_total, seats_filled, price_hint, status)
            VALUES (?,?,?,?,?,?,?,0,?, 'open')""",
-        (campaign_id, kind, slot["datetime"].isoformat(sep=" "), slot["court_id"],
-         round(level - cfg.level_window, 2), round(level + cfg.level_window, 2),
-         seats, slot["price"]),
+        (
+            campaign_id,
+            kind,
+            slot["datetime"].isoformat(sep=" "),
+            slot["court_id"],
+            round(level - cfg.level_window, 2),
+            round(level + cfg.level_window, 2),
+            seats,
+            slot["price"],
+        ),
     )
     offer_id = cur.lastrowid
+    assert offer_id is not None
     conn.execute(
         "INSERT OR IGNORE INTO offer_seats (offer_id, contact_id, state) VALUES (?,?,'invited')",
         (offer_id, row["contact_id"]),
@@ -166,7 +210,7 @@ def plan_offer(conn, club_id: int, campaign_id: int, row, cfg: Config,
     return _offer_dict(conn, offer_id)
 
 
-def _offer_dict(conn, offer_id: int) -> dict:
+def _offer_dict(conn: sqlite3.Connection, offer_id: int) -> dict:
     o = db.must(conn, "SELECT * FROM offers WHERE id=?", (offer_id,))
     dt = datetime.fromisoformat(o["slot_datetime"])
     return {
@@ -185,7 +229,7 @@ def _offer_dict(conn, offer_id: int) -> dict:
     }
 
 
-def accept(conn, offer_id: int, contact_id: int) -> dict:
+def accept(conn: sqlite3.Connection, offer_id: int, contact_id: int) -> dict:
     """Клиент согласился — занимаем место, пересчитываем статус оффера."""
     conn.execute(
         "INSERT OR REPLACE INTO offer_seats (offer_id, contact_id, state, updated_at) "
@@ -197,12 +241,14 @@ def accept(conn, offer_id: int, contact_id: int) -> dict:
     )
     o = db.must(conn, "SELECT seats_total FROM offers WHERE id=?", (offer_id,))
     status = "full" if filled >= o["seats_total"] else "open"
-    conn.execute("UPDATE offers SET seats_filled=?, status=? WHERE id=?", (filled, status, offer_id))
+    conn.execute(
+        "UPDATE offers SET seats_filled=?, status=? WHERE id=?", (filled, status, offer_id)
+    )
     conn.commit()
     return _offer_dict(conn, offer_id)
 
 
-def decline(conn, offer_id: int, contact_id: int) -> None:
+def decline(conn: sqlite3.Connection, offer_id: int, contact_id: int) -> None:
     conn.execute(
         "UPDATE offer_seats SET state='declined', updated_at=datetime('now') "
         "WHERE offer_id=? AND contact_id=?",
@@ -211,7 +257,7 @@ def decline(conn, offer_id: int, contact_id: int) -> None:
     conn.commit()
 
 
-def summary(conn, campaign_id: int) -> dict:
+def summary(conn: sqlite3.Connection, campaign_id: int) -> dict:
     rows = db.all_rows(
         conn,
         """SELECT kind, status, COUNT(*) n, SUM(seats_filled) filled
@@ -220,8 +266,16 @@ def summary(conn, campaign_id: int) -> dict:
     )
     return {
         "by_kind": [dict(r) for r in rows],
-        "full": db.scalar(conn, "SELECT COUNT(*) FROM offers WHERE campaign_id=? AND status='full'", (campaign_id,)),
-        "open": db.scalar(conn, "SELECT COUNT(*) FROM offers WHERE campaign_id=? AND status='open'", (campaign_id,)),
+        "full": db.scalar(
+            conn,
+            "SELECT COUNT(*) FROM offers WHERE campaign_id=? AND status='full'",
+            (campaign_id,),
+        ),
+        "open": db.scalar(
+            conn,
+            "SELECT COUNT(*) FROM offers WHERE campaign_id=? AND status='open'",
+            (campaign_id,),
+        ),
         "seats_taken": db.scalar(
             conn,
             "SELECT COUNT(*) FROM offer_seats os JOIN offers o ON o.id=os.offer_id "

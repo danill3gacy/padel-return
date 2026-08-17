@@ -2,8 +2,10 @@
 
 Ключевое правило: "спящий" — не фиксированные 60 дней, а нарушение личного ритма.
 """
+
 from __future__ import annotations
 
+import sqlite3
 from collections import Counter
 from datetime import datetime
 
@@ -23,16 +25,18 @@ SEGMENT_TITLES = {
 SEGMENT_PRIORITY = ["C", "B", "A", "D", "F", "E"]
 
 
-def is_sleeping(days_since_last, avg_interval, cfg: Config) -> bool:
+def is_sleeping(days_since_last: float | None, avg_interval: float | None, cfg: Config) -> bool:
     if days_since_last is None:
         return False
-    threshold = cfg.sleeping_min_days
+    threshold: float = cfg.sleeping_min_days
     if avg_interval:
         threshold = max(threshold, avg_interval * cfg.sleeping_interval_mult)
     return days_since_last > threshold
 
 
-def _exclusion(row, conn, club_id: int, cfg: Config, as_of: datetime) -> str | None:
+def _exclusion(
+    row: sqlite3.Row, conn: sqlite3.Connection, club_id: int, cfg: Config, as_of: datetime
+) -> str | None:
     if row["is_staff"]:
         return "сотрудник клуба"
     if not row["phone"]:
@@ -55,7 +59,7 @@ def _exclusion(row, conn, club_id: int, cfg: Config, as_of: datetime) -> str | N
     return None
 
 
-def _is_seasonal(conn, contact_id: int, cfg: Config, as_of: datetime) -> bool:
+def _is_seasonal(conn: sqlite3.Connection, contact_id: int, cfg: Config, as_of: datetime) -> bool:
     """Активность сконцентрирована в 3 месяцах года и сейчас — не его сезон."""
     rows = db.all_rows(
         conn,
@@ -74,7 +78,9 @@ def _is_seasonal(conn, contact_id: int, cfg: Config, as_of: datetime) -> bool:
     return share >= 0.8 and as_of.month not in top3
 
 
-def _slot_disappeared(conn, contact_id: int, usual_dow, usual_hour) -> bool:
+def _slot_disappeared(
+    conn: sqlite3.Connection, contact_id: int, usual_dow: int | None, usual_hour: int | None
+) -> bool:
     """Клуб перестал ставить слоты в привычное время клиента (или они всегда заняты)."""
     if usual_dow is None or usual_hour is None:
         return False
@@ -90,7 +96,13 @@ def _slot_disappeared(conn, contact_id: int, usual_dow, usual_hour) -> bool:
     return cnt == 0
 
 
-def build(conn, club_id: int, campaign_id: int, cfg: Config, as_of: datetime | None = None) -> dict:
+def build(
+    conn: sqlite3.Connection,
+    club_id: int,
+    campaign_id: int,
+    cfg: Config,
+    as_of: datetime | None = None,
+) -> dict:
     as_of = as_of or datetime.now()
     rows = db.all_rows(
         conn,
@@ -128,7 +140,9 @@ def build(conn, club_id: int, campaign_id: int, cfg: Config, as_of: datetime | N
             continue
 
         segment = _classify(conn, club_id, r, cfg, as_of)
-        is_control = 1 if stable_bucket(f"{campaign_id}:{r['id']}", "control") < cfg.control_share else 0
+        is_control = (
+            1 if stable_bucket(f"{campaign_id}:{r['id']}", "control") < cfg.control_share else 0
+        )
 
         conn.execute(
             """INSERT INTO segments (campaign_id, contact_id, segment, sleeping, is_control)
@@ -153,7 +167,9 @@ def build(conn, club_id: int, campaign_id: int, cfg: Config, as_of: datetime | N
     return stats
 
 
-def _classify(conn, club_id: int, r, cfg: Config, as_of: datetime) -> str:
+def _classify(
+    conn: sqlite3.Connection, club_id: int, r: sqlite3.Row, cfg: Config, as_of: datetime
+) -> str:
     visits = r["visits_total"] or 0
 
     if (r["no_show_rate"] or 0) > cfg.no_show_problem_rate and visits >= 3:
@@ -176,7 +192,7 @@ def _classify(conn, club_id: int, r, cfg: Config, as_of: datetime) -> str:
     return "C" if visits >= 5 else "A"
 
 
-def audience(conn, campaign_id: int, include_control: bool = False) -> list:
+def audience(conn: sqlite3.Connection, campaign_id: int, include_control: bool = False) -> list:
     sql = """SELECT s.contact_id, s.segment, s.is_control, s.reason, s.confidence,
                     s.evidence, s.best_offer,
                     c.name, c.phone, c.tg_chat_id, c.gender,
@@ -190,7 +206,9 @@ def audience(conn, campaign_id: int, include_control: bool = False) -> list:
                AND s.segment NOT IN ('E')"""
     if not include_control:
         sql += " AND s.is_control=0"
-    sql += " ORDER BY CASE s.segment " + " ".join(
-        f"WHEN '{s}' THEN {i}" for i, s in enumerate(SEGMENT_PRIORITY)
-    ) + " END, f.revenue_total DESC"
+    sql += (
+        " ORDER BY CASE s.segment "
+        + " ".join(f"WHEN '{s}' THEN {i}" for i, s in enumerate(SEGMENT_PRIORITY))
+        + " END, f.revenue_total DESC"
+    )
     return db.all_rows(conn, sql, (campaign_id,))
